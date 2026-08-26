@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "short_name": "Al Hussam ERP",
+  "name": "Al Hussam Tailor ERP",
+  "description": "Mobile workspace for tailoring, counter sales, inventory, invoicing, and staff access.",
+  "icons": [
+    {
+      "src": "/brand/al-hussam-logo-192.jpg",
+      "type": "image/jpeg",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/brand/al-hussam-logo-512.jpg",
+      "type": "image/jpeg",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#fbfaf5",
+  "theme_color": "#1d496b",
+  "display": "standalone",
+  "orientation": "portrait"
+}

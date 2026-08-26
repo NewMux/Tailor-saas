@@ -1,0 +1,76 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786712026240,
+      "tag": "0000_long_amazoness",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786773407993,
+      "tag": "0001_pos_domain",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787120000000,
+      "tag": "0002_offline_delivery_payroll",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787125000000,
+      "tag": "0003_client_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787127028612,
+      "tag": "0003_inventory_roll_tracking",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787140000000,
+      "tag": "0004_customer_workflows",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787160000000,
+      "tag": "0005_tailoring_sale_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787547921592,
+      "tag": "0006_local_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787675102326,
+      "tag": "0007_invoice_payment_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787722849423,
+      "tag": "0008_customer_directory_archive",
+      "breakpoints": true
+    }
+  ]
+}
