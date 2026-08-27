@@ -5,7 +5,7 @@ import { getMonthWindow, rollDerivedQuantity } from "./erp";
 import { effectiveInventoryQuantity } from "./inventoryQuantity";
 
 function context(): TrpcContext {
-  return { user: { id: 1, openId: "test-user", name: "Test User", email: "test@example.com", loginMethod: "manus", role: "user", createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() }, req: {} as TrpcContext["req"], res: {} as TrpcContext["res"] };
+  return { user: { id: 1, organizationId: 1, openId: "test-user", name: "Test User", email: "test@example.com", loginMethod: "manus", role: "user", createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() }, req: {} as TrpcContext["req"], res: {} as TrpcContext["res"] };
 }
 
 describe("ERP input contracts", () => {

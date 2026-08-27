@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   customRoles,
   staffDocuments,
@@ -7,12 +7,13 @@ import {
   userCustomRoles,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { orgScope } from "./tenantDb";
 import { sdk } from "./sdk";
 import { ENV } from "./env";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
 
-async function canReadStaffDocuments(userId: number) {
+async function canReadStaffDocuments(userId: number, organizationId: number) {
   const db = await getDb();
   if (!db) return false;
   const businessRole = (
@@ -22,7 +23,12 @@ async function canReadStaffDocuments(userId: number) {
         isActive: userBusinessRoles.isActive,
       })
       .from(userBusinessRoles)
-      .where(eq(userBusinessRoles.userId, userId))
+      .where(
+        and(
+          eq(userBusinessRoles.userId, userId),
+          orgScope(userBusinessRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (!businessRole?.isActive) return false;
@@ -35,7 +41,12 @@ async function canReadStaffDocuments(userId: number) {
         isActive: userCustomRoles.isActive,
       })
       .from(userCustomRoles)
-      .where(eq(userCustomRoles.userId, userId))
+      .where(
+        and(
+          eq(userCustomRoles.userId, userId),
+          orgScope(userCustomRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (!assignment?.isActive) return false;
@@ -46,7 +57,12 @@ async function canReadStaffDocuments(userId: number) {
         isActive: customRoles.isActive,
       })
       .from(customRoles)
-      .where(eq(customRoles.id, assignment.customRoleId))
+      .where(
+        and(
+          eq(customRoles.id, assignment.customRoleId),
+          orgScope(customRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   const permissions = Array.isArray(customRole?.permissionsJson)
@@ -72,7 +88,11 @@ export function registerStorageProxy(app: Express) {
 
     try {
       const user = await sdk.authenticateRequest(req);
-      if (!(await canReadStaffDocuments(user.id))) {
+      if (!user.organizationId) {
+        res.status(403).send("You are not permitted to access this document.");
+        return;
+      }
+      if (!(await canReadStaffDocuments(user.id, user.organizationId))) {
         res.status(403).send("You are not permitted to access this document.");
         return;
       }
@@ -86,7 +106,12 @@ export function registerStorageProxy(app: Express) {
         await db
           .select({ id: staffDocuments.id })
           .from(staffDocuments)
-          .where(eq(staffDocuments.storageKey, key))
+          .where(
+            and(
+              eq(staffDocuments.storageKey, key),
+              orgScope(staffDocuments, user.organizationId)
+            )
+          )
           .limit(1)
       )[0];
       if (!document) {

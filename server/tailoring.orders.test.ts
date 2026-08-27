@@ -6,7 +6,7 @@ vi.mock("./db", () => ({ getDb: getDbMock }));
 
 import { erpRouter } from "./erp";
 
-const actor = { id: 77, openId: "owner", name: "Owner", email: "owner@example.com", loginMethod: "manus", role: "user" as const, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() };
+const actor = { id: 77, organizationId: 1, openId: "owner", name: "Owner", email: "owner@example.com", loginMethod: "manus", role: "user" as const, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() };
 
 function makeContext() {
   return { user: actor, req: { protocol: "https", headers: {} }, res: {} } as never;

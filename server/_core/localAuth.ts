@@ -39,7 +39,7 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
-function hashOpaqueToken(token: string) {
+export function hashOpaqueToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -58,7 +58,7 @@ async function verifyPassword(password: string, stored: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function randomToken(prefix: string) {
+export function randomToken(prefix: string) {
   return `${prefix}_${randomBytes(32).toString("base64url")}`;
 }
 

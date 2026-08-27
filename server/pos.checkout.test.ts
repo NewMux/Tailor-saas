@@ -39,7 +39,7 @@ describe("pos.checkout", () => {
       transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)),
     };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.checkout({
       sessionId: 1,
@@ -75,7 +75,7 @@ describe("pos.checkout", () => {
       transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)),
     };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     await caller.checkout({ clientReference: "offline-session-test", customerName: "Offline client", discount: 0, paymentMethod: "cash", paymentStatus: "paid", items: [{ serviceId: 4, name: "Navy cotton", quantity: 1, unitPrice: 45 }] });
 
@@ -94,7 +94,7 @@ describe("pos.checkout", () => {
     const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
     const rootDb = { select: vi.fn(() => query(rootResponses.shift() || [])), insert: vi.fn(() => ({ values: vi.fn() })), transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)) };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.checkout({ sessionId: 1, customerName: "Walk-in customer", discount: 0, paymentMethod: "cash", paymentStatus: "paid", items: [{ inventoryItemId: 30001, name: "Navy Premium Cotton", quantity: 2, unitPrice: 9 }] });
 
@@ -104,12 +104,12 @@ describe("pos.checkout", () => {
     expect(writes[2]).toMatchObject({ inventoryItemId: 30001, movementType: "sale", quantityChange: "-2.000", quantityAfter: "14.000" });
   });
 
-  it("blocks a signed-in user whose business access is still pending", async () => {
+  it("blocks a signed-in user with no business role record for this organization", async () => {
     const rootDb = { select: vi.fn(() => query([])), insert: vi.fn() };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 99, role: "user" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 99, organizationId: 1, role: "user" } } as never);
 
-    await expect(caller.catalog.list()).rejects.toThrow("pending owner approval");
+    await expect(caller.catalog.list()).rejects.toThrow("could not be verified");
     expect(rootDb.insert).not.toHaveBeenCalled();
   });
 
@@ -133,7 +133,7 @@ describe("pos.checkout", () => {
       transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)),
     };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.tailoringCheckout({
       sessionId: 1,
@@ -179,7 +179,7 @@ describe("pos.checkout", () => {
     const rootResponses = [[{ userId: 1, role: "admin", isActive: true }], [{ invoicePrefix: "POS" }]];
     const rootDb = { select: vi.fn(() => query(rootResponses.shift() || [])), insert: vi.fn(() => ({ values: vi.fn() })), transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)) };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, serviceId: 4, garmentType: "Thoub", quantity: 1, dueDate: "2026-09-01", orderPrice: 45, paymentAmount: 20, paymentMethod: "benefitpay", notes: "[DEMO] Connected service order", productionNotes: "[DEMO] Deduct shop fabric." });
 
@@ -210,7 +210,7 @@ describe("pos.checkout", () => {
       transaction: vi.fn(async (callback: (tx: typeof transactionDb) => Promise<unknown>) => callback(transactionDb)),
     };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.tailoringCheckout({ sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 0, paymentMethod: "cash", notes: "", productionNotes: "" });
 
@@ -233,7 +233,7 @@ describe("pos.checkout", () => {
       transaction: vi.fn(),
     };
     mocked.getDb.mockResolvedValue(rootDb);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.tailoringCheckout({ clientReference: "retry-tailor-1", sessionId: 1, customerId: 44, measurementProfileId: 9, assignedTailorId: 7, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 20, paymentMethod: "cash", notes: "", productionNotes: "" });
 
@@ -243,7 +243,7 @@ describe("pos.checkout", () => {
   });
 
   it("rejects a tailoring payment that exceeds the quoted order price before creating records", async () => {
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
     await expect(caller.tailoringCheckout({ sessionId: 1, customerId: 1, measurementProfileId: 1, assignedTailorId: 1, garmentType: "Thoub", quantity: 1, orderPrice: 45, paymentAmount: 46, paymentMethod: "cash", notes: "", productionNotes: "" })).rejects.toThrow("The payment collected cannot exceed the quoted order price.");
   });
 });

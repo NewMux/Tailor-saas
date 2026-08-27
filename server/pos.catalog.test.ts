@@ -59,7 +59,7 @@ describe("pos.catalog", () => {
     const responses = [[{ userId: 1, role: "admin", isActive: true }], serviceRows, inventoryRows, []];
     const db = { select: vi.fn(() => query(responses.shift() || [])) };
     mocked.getDb.mockResolvedValue(db);
-    const caller = posRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = posRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.catalog.list();
 

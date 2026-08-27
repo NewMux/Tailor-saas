@@ -7,7 +7,7 @@ import { appRouter } from "./routers";
 
 const query = (rows: unknown[]) => ({
   from: () => ({
-    where: () => ({ limit: () => rows }),
+    where: () => ({ orderBy: () => ({ limit: () => rows }), limit: () => rows }),
     orderBy: () => ({ limit: () => rows }),
     limit: () => rows,
   }),
@@ -31,7 +31,7 @@ describe("erp.invoices.list", () => {
       ],
     ];
     mocked.getDb.mockResolvedValue({ select: vi.fn(() => query(responses.shift() || [])) });
-    const caller = appRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = appRouter.createCaller({ user: { id: 1, organizationId: 1, role: "admin" } } as never);
 
     const result = await caller.erp.invoices.list({ search: "ahmed", status: "paid", source: "counter", paymentMethod: "cash", startDate: "2026-08-01", endDate: "2026-08-31" });
 

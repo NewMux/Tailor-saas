@@ -25,7 +25,8 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { effectiveInventoryQuantity } from "./inventoryQuantity";
-import { protectedProcedure, router } from "./_core/trpc";
+import { tenantProcedure, router } from "./_core/trpc";
+import { orgScope } from "./_core/tenantDb";
 
 const money = (value: number) => Number(value.toFixed(3)).toFixed(3);
 const paymentMethod = z.enum([
@@ -126,19 +127,24 @@ async function dbOrThrow() {
   return db;
 }
 
-async function requireCounterAccess(userId: number) {
+async function requireCounterAccess(userId: number, organizationId: number) {
   const db = await dbOrThrow();
   const role = (
     await db
       .select()
       .from(userBusinessRoles)
-      .where(eq(userBusinessRoles.userId, userId))
+      .where(
+        and(
+          eq(userBusinessRoles.userId, userId),
+          orgScope(userBusinessRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (!role)
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "Your ERP access is pending owner approval.",
+      message: "Your ERP access could not be verified.",
     });
   if (!role.isActive)
     throw new TRPCError({
@@ -150,7 +156,12 @@ async function requireCounterAccess(userId: number) {
     await db
       .select()
       .from(userCustomRoles)
-      .where(eq(userCustomRoles.userId, userId))
+      .where(
+        and(
+          eq(userCustomRoles.userId, userId),
+          orgScope(userCustomRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (assignment) {
@@ -158,7 +169,12 @@ async function requireCounterAccess(userId: number) {
       await db
         .select()
         .from(customRoles)
-        .where(eq(customRoles.id, assignment.customRoleId))
+        .where(
+          and(
+            eq(customRoles.id, assignment.customRoleId),
+            orgScope(customRoles, organizationId)
+          )
+        )
         .limit(1)
     )[0];
     const permissions = Array.isArray(customRole?.permissionsJson)
@@ -187,25 +203,26 @@ async function requireCounterAccess(userId: number) {
 
 async function audit(
   userId: number,
+  organizationId: number,
   action: string,
   entityType: string,
   entityId: number | undefined,
   details: unknown
 ) {
   const db = await dbOrThrow();
-  await db
-    .insert(auditLogs)
-    .values({
-      actorId: userId,
-      action,
-      entityType,
-      entityId,
-      detailsJson: JSON.stringify(details),
-    });
+  await db.insert(auditLogs).values({
+    organizationId,
+    actorId: userId,
+    action,
+    entityType,
+    entityId,
+    detailsJson: JSON.stringify(details),
+  });
 }
 
 async function existingCheckoutByReference(
-  clientReference: string | undefined
+  clientReference: string | undefined,
+  organizationId: number
 ) {
   if (!clientReference) return null;
   const db = await dbOrThrow();
@@ -221,7 +238,12 @@ async function existingCheckoutByReference(
       })
       .from(sales)
       .innerJoin(invoices, eq(invoices.saleId, sales.id))
-      .where(eq(sales.clientReference, clientReference))
+      .where(
+        and(
+          eq(sales.clientReference, clientReference),
+          orgScope(sales, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   return existing
@@ -237,16 +259,22 @@ async function existingCheckoutByReference(
 }
 
 async function existingTailoringCheckoutByReference(
-  clientReference: string | undefined
+  clientReference: string | undefined,
+  organizationId: number
 ) {
-  const replay = await existingCheckoutByReference(clientReference);
+  const replay = await existingCheckoutByReference(clientReference, organizationId);
   if (!replay) return null;
   const db = await dbOrThrow();
   const order = (
     await db
       .select({ orderNumber: tailoringOrders.orderNumber })
       .from(tailoringOrders)
-      .where(eq(tailoringOrders.saleId, replay.id))
+      .where(
+        and(
+          eq(tailoringOrders.saleId, replay.id),
+          orgScope(tailoringOrders, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   return {
@@ -256,13 +284,14 @@ async function existingTailoringCheckoutByReference(
   };
 }
 
-async function consumeDiscountUsage(tx: any, discountId: number) {
+async function consumeDiscountUsage(tx: any, discountId: number, organizationId: number) {
   const updated = await tx
     .update(discountCodes)
     .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
     .where(
       and(
         eq(discountCodes.id, discountId),
+        orgScope(discountCodes, organizationId),
         or(
           isNull(discountCodes.usageLimit),
           lt(discountCodes.usedCount, discountCodes.usageLimit)
@@ -408,12 +437,12 @@ const returnInput = z
       });
   });
 
-async function validateSession(tx: any, sessionId: number) {
+async function validateSession(tx: any, sessionId: number, organizationId: number) {
   const session = (
     await tx
       .select()
       .from(posSessions)
-      .where(eq(posSessions.id, sessionId))
+      .where(and(eq(posSessions.id, sessionId), orgScope(posSessions, organizationId)))
       .limit(1)
   )[0];
   if (!session || session.status !== "open")
@@ -427,14 +456,15 @@ async function validateSession(tx: any, sessionId: number) {
 async function resolveSession(
   tx: any,
   sessionId: number | undefined,
-  userId: number
+  userId: number,
+  organizationId: number
 ) {
-  if (sessionId) return validateSession(tx, sessionId);
+  if (sessionId) return validateSession(tx, sessionId, organizationId);
   const existing = (
     await tx
       .select()
       .from(posSessions)
-      .where(eq(posSessions.status, "open"))
+      .where(and(orgScope(posSessions, organizationId), eq(posSessions.status, "open")))
       .orderBy(desc(posSessions.openedAt))
       .limit(1)
   )[0];
@@ -446,6 +476,7 @@ async function resolveSession(
   const result = await tx
     .insert(posSessions)
     .values({
+      organizationId,
       sessionNumber,
       openedBy: userId,
       openingCash: money(0),
@@ -464,14 +495,15 @@ async function resolveSession(
 async function resolveDiscount(
   tx: any,
   code: string | undefined,
-  subtotal: number
+  subtotal: number,
+  organizationId: number
 ) {
   if (!code) return { id: null, snapshot: null, amount: 0 };
   const record = (
     await tx
       .select()
       .from(discountCodes)
-      .where(eq(discountCodes.code, code.toUpperCase()))
+      .where(and(eq(discountCodes.code, code.toUpperCase()), orgScope(discountCodes, organizationId)))
       .limit(1)
   )[0];
   if (!record || !record.isActive)
@@ -507,8 +539,8 @@ async function resolveDiscount(
 
 export const posRouter = router({
   catalog: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      await requireCounterAccess(ctx.user.id);
+    list: tenantProcedure.query(async ({ ctx }) => {
+      await requireCounterAccess(ctx.user.id, ctx.organizationId);
       const db = await dbOrThrow();
       const [serviceRows, inventoryRows] = await Promise.all([
         db
@@ -518,12 +550,12 @@ export const posRouter = router({
             inventoryItems,
             eq(services.inventoryItemId, inventoryItems.id)
           )
-          .where(eq(services.isActive, true))
+          .where(and(orgScope(services, ctx.organizationId), eq(services.isActive, true)))
           .orderBy(services.name),
         db
           .select()
           .from(inventoryItems)
-          .where(eq(inventoryItems.isActive, true))
+          .where(and(orgScope(inventoryItems, ctx.organizationId), eq(inventoryItems.isActive, true)))
           .orderBy(inventoryItems.name),
       ]);
       const inventoryIds = inventoryRows.map(item => item.id);
@@ -531,7 +563,12 @@ export const posRouter = router({
         ? await db
             .select({ inventoryItemId: stockMovements.inventoryItemId })
             .from(stockMovements)
-            .where(inArray(stockMovements.inventoryItemId, inventoryIds))
+            .where(
+              and(
+                orgScope(stockMovements, ctx.organizationId),
+                inArray(stockMovements.inventoryItemId, inventoryIds)
+              )
+            )
             .groupBy(stockMovements.inventoryItemId)
         : [];
       const movementIds = new Set(movementRows.map(row => row.inventoryItemId));
@@ -603,30 +640,30 @@ export const posRouter = router({
     }),
   }),
   session: router({
-    current: protectedProcedure.query(async ({ ctx }) => {
-      await requireCounterAccess(ctx.user.id);
+    current: tenantProcedure.query(async ({ ctx }) => {
+      await requireCounterAccess(ctx.user.id, ctx.organizationId);
       const db = await dbOrThrow();
       return (
         (
           await db
             .select()
             .from(posSessions)
-            .where(eq(posSessions.status, "open"))
+            .where(and(orgScope(posSessions, ctx.organizationId), eq(posSessions.status, "open")))
             .orderBy(desc(posSessions.openedAt))
             .limit(1)
         )[0] || null
       );
     }),
-    open: protectedProcedure
+    open: tenantProcedure
       .input(sessionInput)
       .mutation(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
         const existing = (
           await db
             .select()
             .from(posSessions)
-            .where(eq(posSessions.status, "open"))
+            .where(and(orgScope(posSessions, ctx.organizationId), eq(posSessions.status, "open")))
             .orderBy(desc(posSessions.openedAt))
             .limit(1)
         )[0];
@@ -638,6 +675,7 @@ export const posRouter = router({
         const result = await db
           .insert(posSessions)
           .values({
+            organizationId: ctx.organizationId,
             sessionNumber,
             openedBy: ctx.user.id,
             openingCash: money(input.openingCash),
@@ -646,7 +684,7 @@ export const posRouter = router({
           .returning();
         const session = result[0];
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "POS_SESSION_OPENED",
           "posSession",
           session.id,
@@ -654,7 +692,7 @@ export const posRouter = router({
         );
         return session;
       }),
-    close: protectedProcedure
+    close: tenantProcedure
       .input(
         z.object({
           sessionId: z.number().int().positive(),
@@ -663,13 +701,13 @@ export const posRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
         const session = (
           await db
             .select()
             .from(posSessions)
-            .where(eq(posSessions.id, input.sessionId))
+            .where(and(eq(posSessions.id, input.sessionId), orgScope(posSessions, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!session || session.status !== "open")
@@ -685,9 +723,9 @@ export const posRouter = router({
             closedAt: new Date(),
             notes: input.notes || session.notes,
           })
-          .where(eq(posSessions.id, session.id));
+          .where(and(eq(posSessions.id, session.id), orgScope(posSessions, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "POS_SESSION_CLOSED",
           "posSession",
           session.id,
@@ -700,25 +738,26 @@ export const posRouter = router({
       }),
   }),
   orders: router({
-    held: protectedProcedure.query(async ({ ctx }) => {
-      await requireCounterAccess(ctx.user.id);
+    held: tenantProcedure.query(async ({ ctx }) => {
+      await requireCounterAccess(ctx.user.id, ctx.organizationId);
       const db = await dbOrThrow();
       return db
         .select()
         .from(posOrders)
-        .where(eq(posOrders.status, "held"))
+        .where(and(orgScope(posOrders, ctx.organizationId), eq(posOrders.status, "held")))
         .orderBy(desc(posOrders.updatedAt))
         .limit(100);
     }),
-    hold: protectedProcedure
+    hold: tenantProcedure
       .input(heldOrderInput)
       .mutation(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
         const orderNumber = `HOLD-${Date.now()}`;
         const result = await db
           .insert(posOrders)
           .values({
+            organizationId: ctx.organizationId,
             orderNumber,
             sessionId: input.sessionId,
             customerId: input.customerId,
@@ -728,23 +767,23 @@ export const posRouter = router({
           })
           .returning({ id: posOrders.id });
         const id = Number(result[0]?.id || 0);
-        await audit(ctx.user.id, "POS_ORDER_HELD", "posOrder", id, {
+        await audit(ctx.user.id, ctx.organizationId, "POS_ORDER_HELD", "posOrder", id, {
           orderNumber,
           lineCount: input.items.length,
         });
         return { id, orderNumber };
       }),
-    cancel: protectedProcedure
+    cancel: tenantProcedure
       .input(z.object({ orderId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
         await db
           .update(posOrders)
           .set({ status: "cancelled", updatedAt: new Date() })
-          .where(eq(posOrders.id, input.orderId));
+          .where(and(eq(posOrders.id, input.orderId), orgScope(posOrders, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "POS_ORDER_CANCELLED",
           "posOrder",
           input.orderId,
@@ -754,7 +793,7 @@ export const posRouter = router({
       }),
   }),
   discounts: router({
-    validate: protectedProcedure
+    validate: tenantProcedure
       .input(
         z.object({
           code: z.string().trim().min(1).max(80),
@@ -762,25 +801,32 @@ export const posRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
-        return resolveDiscount(db, input.code, input.subtotal);
+        return resolveDiscount(db, input.code, input.subtotal, ctx.organizationId);
       }),
   }),
-  checkout: protectedProcedure
+  checkout: tenantProcedure
     .input(checkoutInput)
     .mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id);
-      const replay = await existingCheckoutByReference(input.clientReference);
+      await requireCounterAccess(ctx.user.id, ctx.organizationId);
+      const replay = await existingCheckoutByReference(input.clientReference, ctx.organizationId);
       if (replay) return replay;
       const db = await dbOrThrow();
-      const shop = (await db.select().from(shopSettings).limit(1))[0];
+      const shop = (
+        await db
+          .select()
+          .from(shopSettings)
+          .where(orgScope(shopSettings, ctx.organizationId))
+          .limit(1)
+      )[0];
       const saleNumber = `POS-${Date.now()}`;
       const checkout = await db.transaction(async tx => {
         const resolvedSession = await resolveSession(
           tx,
           input.sessionId,
-          ctx.user.id
+          ctx.user.id,
+          ctx.organizationId
         );
         const resolved = [] as Array<{
           serviceId: number | null;
@@ -803,7 +849,12 @@ export const posRouter = router({
               await tx
                 .select()
                 .from(inventoryItems)
-                .where(eq(inventoryItems.id, item.inventoryItemId))
+                .where(
+                  and(
+                    eq(inventoryItems.id, item.inventoryItemId),
+                    orgScope(inventoryItems, ctx.organizationId)
+                  )
+                )
                 .for("update")
                 .limit(1)
             )[0];
@@ -816,7 +867,12 @@ export const posRouter = router({
               await tx
                 .select({ id: stockMovements.id })
                 .from(stockMovements)
-                .where(eq(stockMovements.inventoryItemId, stock.id))
+                .where(
+                  and(
+                    eq(stockMovements.inventoryItemId, stock.id),
+                    orgScope(stockMovements, ctx.organizationId)
+                  )
+                )
                 .limit(1)
             )[0];
             const availableQuantity = effectiveInventoryQuantity({
@@ -847,7 +903,7 @@ export const posRouter = router({
             await tx
               .select()
               .from(services)
-              .where(eq(services.id, item.serviceId!))
+              .where(and(eq(services.id, item.serviceId!), orgScope(services, ctx.organizationId)))
               .limit(1)
           )[0];
           if (!catalogItem || !catalogItem.isActive)
@@ -868,7 +924,12 @@ export const posRouter = router({
                 await tx
                   .select()
                   .from(inventoryItems)
-                  .where(eq(inventoryItems.id, catalogItem.inventoryItemId))
+                  .where(
+                    and(
+                      eq(inventoryItems.id, catalogItem.inventoryItemId),
+                      orgScope(inventoryItems, ctx.organizationId)
+                    )
+                  )
                   .for("update")
                   .limit(1)
               )[0]
@@ -883,7 +944,12 @@ export const posRouter = router({
                 await tx
                   .select({ id: stockMovements.id })
                   .from(stockMovements)
-                  .where(eq(stockMovements.inventoryItemId, stock.id))
+                  .where(
+                    and(
+                      eq(stockMovements.inventoryItemId, stock.id),
+                      orgScope(stockMovements, ctx.organizationId)
+                    )
+                  )
                   .limit(1)
               )[0]
             : null;
@@ -927,14 +993,15 @@ export const posRouter = router({
         const code = await resolveDiscount(
           tx,
           input.discountCode,
-          subtotal - lineDiscount
+          subtotal - lineDiscount,
+          ctx.organizationId
         );
         const customer = input.customerId
           ? (
               await tx
                 .select()
                 .from(customers)
-                .where(eq(customers.id, input.customerId))
+                .where(and(eq(customers.id, input.customerId), orgScope(customers, ctx.organizationId)))
                 .limit(1)
             )[0]
           : null;
@@ -972,6 +1039,7 @@ export const posRouter = router({
         const saleResult = await tx
           .insert(sales)
           .values({
+            organizationId: ctx.organizationId,
             saleNumber,
             clientReference: input.clientReference || null,
             customerId: customer?.id || null,
@@ -1003,6 +1071,7 @@ export const posRouter = router({
           await tx
             .insert(saleItems)
             .values({
+              organizationId: ctx.organizationId,
               saleId,
               serviceId: item.serviceId,
               inventoryItemId: item.inventoryItemId,
@@ -1028,10 +1097,11 @@ export const posRouter = router({
             await tx
               .update(inventoryItems)
               .set({ quantity: money(after) })
-              .where(eq(inventoryItems.id, item.stock.id));
+              .where(and(eq(inventoryItems.id, item.stock.id), orgScope(inventoryItems, ctx.organizationId)));
             await tx
               .insert(stockMovements)
               .values({
+                organizationId: ctx.organizationId,
                 inventoryItemId: item.stock.id,
                 movementType: "sale",
                 quantityChange: money(-quantityDeducted),
@@ -1049,16 +1119,18 @@ export const posRouter = router({
             await tx
               .insert(posPayments)
               .values({
+                organizationId: ctx.organizationId,
                 saleId,
                 method: payment.method,
                 amount: money(payment.amount),
                 reference: payment.reference || null,
                 createdBy: ctx.user.id,
               });
-        if (code.id) await consumeDiscountUsage(tx, code.id);
+        if (code.id) await consumeDiscountUsage(tx, code.id, ctx.organizationId);
         const invoiceResult = await tx
           .insert(invoices)
           .values({
+            organizationId: ctx.organizationId,
             saleId,
             invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`,
             status: calculatedStatus,
@@ -1075,7 +1147,7 @@ export const posRouter = router({
           await tx
             .update(posOrders)
             .set({ status: "paid", updatedAt: new Date() })
-            .where(eq(posOrders.id, input.heldOrderId));
+            .where(and(eq(posOrders.id, input.heldOrderId), orgScope(posOrders, ctx.organizationId)));
         return {
           saleId,
           invoiceId,
@@ -1086,7 +1158,7 @@ export const posRouter = router({
         };
       });
       await audit(
-        ctx.user.id,
+        ctx.user.id, ctx.organizationId,
         "POS_CHECKOUT_COMPLETED",
         "sale",
         checkout.saleId,
@@ -1107,14 +1179,20 @@ export const posRouter = router({
         saleNumber,
       };
     }),
-  quickCheckout: protectedProcedure
+  quickCheckout: tenantProcedure
     .input(quickCheckoutInput)
     .mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id);
-      const replay = await existingCheckoutByReference(input.clientReference);
+      await requireCounterAccess(ctx.user.id, ctx.organizationId);
+      const replay = await existingCheckoutByReference(input.clientReference, ctx.organizationId);
       if (replay) return replay;
       const db = await dbOrThrow();
-      const shop = (await db.select().from(shopSettings).limit(1))[0];
+      const shop = (
+        await db
+          .select()
+          .from(shopSettings)
+          .where(orgScope(shopSettings, ctx.organizationId))
+          .limit(1)
+      )[0];
       const saleNumber = `POS-${Date.now()}`;
       const tax = taxFor(input.amount, shop);
       const total = tax.grossAmount;
@@ -1122,14 +1200,15 @@ export const posRouter = router({
         const resolvedSession = await resolveSession(
           tx,
           input.sessionId,
-          ctx.user.id
+          ctx.user.id,
+          ctx.organizationId
         );
         const customer = input.customerId
           ? (
               await tx
                 .select()
                 .from(customers)
-                .where(eq(customers.id, input.customerId))
+                .where(and(eq(customers.id, input.customerId), orgScope(customers, ctx.organizationId)))
                 .limit(1)
             )[0]
           : null;
@@ -1141,6 +1220,7 @@ export const posRouter = router({
         const saleResult = await tx
           .insert(sales)
           .values({
+            organizationId: ctx.organizationId,
             saleNumber,
             clientReference: input.clientReference || null,
             customerId: customer?.id || null,
@@ -1167,6 +1247,7 @@ export const posRouter = router({
             message: "The walk-in sale could not be created.",
           });
         await tx.insert(saleItems).values({
+          organizationId: ctx.organizationId,
           saleId,
           serviceId: null,
           inventoryItemId: null,
@@ -1181,6 +1262,7 @@ export const posRouter = router({
         await tx
           .insert(posPayments)
           .values({
+            organizationId: ctx.organizationId,
             saleId,
             method: input.paymentMethod,
             amount: money(total),
@@ -1190,6 +1272,7 @@ export const posRouter = router({
         const invoiceResult = await tx
           .insert(invoices)
           .values({
+            organizationId: ctx.organizationId,
             saleId,
             invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`,
             status: "paid",
@@ -1211,7 +1294,7 @@ export const posRouter = router({
         };
       });
       await audit(
-        ctx.user.id,
+        ctx.user.id, ctx.organizationId,
         "POS_WALKIN_CHECKOUT_COMPLETED",
         "sale",
         checkout.saleId,
@@ -1231,7 +1314,7 @@ export const posRouter = router({
       };
     }),
   returns: router({
-    lookup: protectedProcedure
+    lookup: tenantProcedure
       .input(
         z.object({
           saleNumber: z.string().trim().min(1).max(160),
@@ -1239,14 +1322,14 @@ export const posRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
         const term = (input.search || input.saleNumber).trim();
         const exact = (
           await db
             .select()
             .from(sales)
-            .where(eq(sales.saleNumber, term))
+            .where(and(eq(sales.saleNumber, term), orgScope(sales, ctx.organizationId)))
             .limit(1)
         )[0];
         const sale =
@@ -1257,6 +1340,7 @@ export const posRouter = router({
               .from(sales)
               .where(
                 and(
+                  orgScope(sales, ctx.organizationId),
                   or(
                     like(sales.saleNumber, `%${term}%`),
                     like(sales.customerNameSnapshot, `%${term}%`),
@@ -1272,26 +1356,33 @@ export const posRouter = router({
         const items = await db
           .select()
           .from(saleItems)
-          .where(eq(saleItems.saleId, sale.id));
+          .where(and(eq(saleItems.saleId, sale.id), orgScope(saleItems, ctx.organizationId)));
         return { sale, items };
       }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(returnInput)
       .mutation(async ({ ctx, input }) => {
-        await requireCounterAccess(ctx.user.id);
+        await requireCounterAccess(ctx.user.id, ctx.organizationId);
         const db = await dbOrThrow();
-        const shop = (await db.select().from(shopSettings).limit(1))[0];
+        const shop = (
+          await db
+            .select()
+            .from(shopSettings)
+            .where(orgScope(shopSettings, ctx.organizationId))
+            .limit(1)
+        )[0];
         const result = await db.transaction(async tx => {
           const resolvedSession = await resolveSession(
             tx,
             input.sessionId,
-            ctx.user.id
+            ctx.user.id,
+            ctx.organizationId
           );
           const original = (
             await tx
               .select()
               .from(sales)
-              .where(eq(sales.id, input.originalSaleId))
+              .where(and(eq(sales.id, input.originalSaleId), orgScope(sales, ctx.organizationId)))
               .limit(1)
           )[0];
           if (!original)
@@ -1302,18 +1393,18 @@ export const posRouter = router({
           const originalItems = await tx
             .select()
             .from(saleItems)
-            .where(eq(saleItems.saleId, original.id));
+            .where(and(eq(saleItems.saleId, original.id), orgScope(saleItems, ctx.organizationId)));
           const priorReturns = await tx
             .select()
             .from(sales)
-            .where(eq(sales.returnOfSaleId, original.id));
+            .where(and(eq(sales.returnOfSaleId, original.id), orgScope(sales, ctx.organizationId)));
           const priorRefunds = priorReturns.filter(
             row => row.returnMode !== "exchange_replacement"
           );
           const priorReturnIds = new Set(priorRefunds.map(row => row.id));
-          const priorReturnItems = (await tx.select().from(saleItems)).filter(
-            item => priorReturnIds.has(item.saleId)
-          );
+          const priorReturnItems = (
+            await tx.select().from(saleItems).where(orgScope(saleItems, ctx.organizationId))
+          ).filter(item => priorReturnIds.has(item.saleId));
           const lines =
             input.mode === "items" || input.mode === "exchange"
               ? (input.items || []).map(request => {
@@ -1401,7 +1492,7 @@ export const posRouter = router({
                 await tx
                   .select()
                   .from(services)
-                  .where(eq(services.id, replacementInput.serviceId))
+                  .where(and(eq(services.id, replacementInput.serviceId), orgScope(services, ctx.organizationId)))
                   .limit(1)
               )[0];
               if (!service || !service.isActive)
@@ -1414,7 +1505,12 @@ export const posRouter = router({
                     await tx
                       .select()
                       .from(inventoryItems)
-                      .where(eq(inventoryItems.id, service.inventoryItemId))
+                      .where(
+                        and(
+                          eq(inventoryItems.id, service.inventoryItemId),
+                          orgScope(inventoryItems, ctx.organizationId)
+                        )
+                      )
                       .for("update")
                       .limit(1)
                   )[0] || null
@@ -1447,7 +1543,10 @@ export const posRouter = router({
                       .select()
                       .from(inventoryItems)
                       .where(
-                        eq(inventoryItems.id, replacementInput.inventoryItemId)
+                        and(
+                          eq(inventoryItems.id, replacementInput.inventoryItemId),
+                          orgScope(inventoryItems, ctx.organizationId)
+                        )
                       )
                       .for("update")
                       .limit(1)
@@ -1504,6 +1603,7 @@ export const posRouter = router({
           const saleResult = await tx
             .insert(sales)
             .values({
+              organizationId: ctx.organizationId,
               saleNumber,
               customerId: original.customerId,
               customerNameSnapshot: original.customerNameSnapshot,
@@ -1530,6 +1630,7 @@ export const posRouter = router({
               await tx
                 .insert(saleItems)
                 .values({
+                  organizationId: ctx.organizationId,
                   saleId,
                   serviceId: line.source.serviceId,
                   inventoryItemId: line.source.inventoryItemId,
@@ -1546,7 +1647,12 @@ export const posRouter = router({
                   await tx
                     .select()
                     .from(inventoryItems)
-                    .where(eq(inventoryItems.id, line.source.inventoryItemId))
+                    .where(
+                      and(
+                        eq(inventoryItems.id, line.source.inventoryItemId),
+                        orgScope(inventoryItems, ctx.organizationId)
+                      )
+                    )
                     .for("update")
                     .limit(1)
                 )[0];
@@ -1560,7 +1666,12 @@ export const posRouter = router({
                               defaultFabricMeters: services.defaultFabricMeters,
                             })
                             .from(services)
-                            .where(eq(services.id, line.source.serviceId))
+                            .where(
+                              and(
+                                eq(services.id, line.source.serviceId),
+                                orgScope(services, ctx.organizationId)
+                              )
+                            )
                             .limit(1)
                         )[0]?.defaultFabricMeters || 1
                       )
@@ -1569,10 +1680,11 @@ export const posRouter = router({
                   await tx
                     .update(inventoryItems)
                     .set({ quantity: money(after) })
-                    .where(eq(inventoryItems.id, stock.id));
+                    .where(and(eq(inventoryItems.id, stock.id), orgScope(inventoryItems, ctx.organizationId)));
                   await tx
                     .insert(stockMovements)
                     .values({
+                      organizationId: ctx.organizationId,
                       inventoryItemId: stock.id,
                       movementType: "return",
                       quantityChange: money(line.quantity),
@@ -1590,6 +1702,7 @@ export const posRouter = router({
             await tx
               .insert(saleItems)
               .values({
+                organizationId: ctx.organizationId,
                 saleId,
                 serviceId: null,
                 inventoryItemId: null,
@@ -1605,6 +1718,7 @@ export const posRouter = router({
           await tx
             .insert(posPayments)
             .values({
+              organizationId: ctx.organizationId,
               saleId,
               method: input.paymentMethod,
               amount: money(-requestedGross),
@@ -1614,6 +1728,7 @@ export const posRouter = router({
           const invoiceResult = await tx
             .insert(invoices)
             .values({
+              organizationId: ctx.organizationId,
               saleId,
               invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`,
               status: "paid",
@@ -1629,6 +1744,7 @@ export const posRouter = router({
             const replacementSaleResult = await tx
               .insert(sales)
               .values({
+                organizationId: ctx.organizationId,
                 saleNumber: replacementSaleNumber,
                 customerId: original.customerId,
                 customerNameSnapshot: original.customerNameSnapshot,
@@ -1653,6 +1769,7 @@ export const posRouter = router({
             await tx
               .insert(saleItems)
               .values({
+                organizationId: ctx.organizationId,
                 saleId: replacementSaleId,
                 serviceId: replacement.serviceId,
                 inventoryItemId: replacement.inventoryItemId,
@@ -1671,10 +1788,16 @@ export const posRouter = router({
               await tx
                 .update(inventoryItems)
                 .set({ quantity: money(after) })
-                .where(eq(inventoryItems.id, replacement.inventoryItemId));
+                .where(
+                  and(
+                    eq(inventoryItems.id, replacement.inventoryItemId),
+                    orgScope(inventoryItems, ctx.organizationId)
+                  )
+                );
               await tx
                 .insert(stockMovements)
                 .values({
+                  organizationId: ctx.organizationId,
                   inventoryItemId: replacement.inventoryItemId,
                   movementType: "sale",
                   quantityChange: money(
@@ -1691,6 +1814,7 @@ export const posRouter = router({
             await tx
               .insert(posPayments)
               .values({
+                organizationId: ctx.organizationId,
                 saleId: replacementSaleId,
                 method: input.paymentMethod,
                 amount: money(requestedGross),
@@ -1701,6 +1825,7 @@ export const posRouter = router({
               await tx
                 .insert(posPayments)
                 .values({
+                  organizationId: ctx.organizationId,
                   saleId: replacementSaleId,
                   method: input.paymentMethod,
                   amount: money(settlementAmount),
@@ -1713,6 +1838,7 @@ export const posRouter = router({
             const replacementInvoiceResult = await tx
               .insert(invoices)
               .values({
+                organizationId: ctx.organizationId,
                 saleId: replacementSaleId,
                 invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(replacementSaleId).padStart(6, "0")}`,
                 status: "paid",
@@ -1734,7 +1860,7 @@ export const posRouter = router({
           };
         });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           input.mode === "exchange"
             ? "POS_EXCHANGE_COMPLETED"
             : "POS_RETURN_COMPLETED",
@@ -1750,16 +1876,23 @@ export const posRouter = router({
         return result;
       }),
   }),
-  tailoringCheckout: protectedProcedure
+  tailoringCheckout: tenantProcedure
     .input(tailoringCheckoutInput)
     .mutation(async ({ ctx, input }) => {
-      await requireCounterAccess(ctx.user.id);
+      await requireCounterAccess(ctx.user.id, ctx.organizationId);
       const replay = await existingTailoringCheckoutByReference(
-        input.clientReference
+        input.clientReference,
+        ctx.organizationId
       );
       if (replay) return replay;
       const db = await dbOrThrow();
-      const shop = (await db.select().from(shopSettings).limit(1))[0];
+      const shop = (
+        await db
+          .select()
+          .from(shopSettings)
+          .where(orgScope(shopSettings, ctx.organizationId))
+          .limit(1)
+      )[0];
       const orderNumber = `TO-${Date.now()}`;
       const saleNumber = `POS-TO-${Date.now()}`;
       const paymentStatus =
@@ -1773,13 +1906,14 @@ export const posRouter = router({
         const resolvedSession = await resolveSession(
           tx,
           input.sessionId,
-          ctx.user.id
+          ctx.user.id,
+          ctx.organizationId
         );
         const customer = (
           await tx
             .select()
             .from(customers)
-            .where(eq(customers.id, input.customerId))
+            .where(and(eq(customers.id, input.customerId), orgScope(customers, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!customer)
@@ -1792,7 +1926,12 @@ export const posRouter = router({
           await tx
             .select()
             .from(measurementProfiles)
-            .where(eq(measurementProfiles.id, input.measurementProfileId))
+            .where(
+              and(
+                eq(measurementProfiles.id, input.measurementProfileId),
+                orgScope(measurementProfiles, ctx.organizationId)
+              )
+            )
             .limit(1)
         )[0];
         if (!measurement || measurement.customerId !== customer.id)
@@ -1805,7 +1944,7 @@ export const posRouter = router({
           await tx
             .select()
             .from(staffProfiles)
-            .where(eq(staffProfiles.id, input.assignedTailorId))
+            .where(and(eq(staffProfiles.id, input.assignedTailorId), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!tailor?.isActive)
@@ -1818,7 +1957,7 @@ export const posRouter = router({
               await tx
                 .select()
                 .from(services)
-                .where(eq(services.id, input.serviceId))
+                .where(and(eq(services.id, input.serviceId), orgScope(services, ctx.organizationId)))
                 .limit(1)
             )[0]
           : null;
@@ -1832,7 +1971,12 @@ export const posRouter = router({
               await tx
                 .select()
                 .from(inventoryItems)
-                .where(eq(inventoryItems.id, service.inventoryItemId))
+                .where(
+                  and(
+                    eq(inventoryItems.id, service.inventoryItemId),
+                    orgScope(inventoryItems, ctx.organizationId)
+                  )
+                )
                 .for("update")
                 .limit(1)
             )[0]
@@ -1852,7 +1996,12 @@ export const posRouter = router({
               await tx
                 .select({ id: stockMovements.id })
                 .from(stockMovements)
-                .where(eq(stockMovements.inventoryItemId, linkedStock.id))
+                .where(
+                  and(
+                    eq(stockMovements.inventoryItemId, linkedStock.id),
+                    orgScope(stockMovements, ctx.organizationId)
+                  )
+                )
                 .limit(1)
             )[0]
           : null;
@@ -1882,6 +2031,7 @@ export const posRouter = router({
         const orderResult = await tx
           .insert(tailoringOrders)
           .values({
+            organizationId: ctx.organizationId,
             orderNumber,
             customerId: customer.id,
             measurementProfileId: measurement.id,
@@ -1902,6 +2052,7 @@ export const posRouter = router({
         const saleResult = await tx
           .insert(sales)
           .values({
+            organizationId: ctx.organizationId,
             saleNumber,
             clientReference: input.clientReference || null,
             customerId: customer.id,
@@ -1924,11 +2075,12 @@ export const posRouter = router({
         await tx
           .update(tailoringOrders)
           .set({ saleId })
-          .where(eq(tailoringOrders.id, orderId));
+          .where(and(eq(tailoringOrders.id, orderId), orgScope(tailoringOrders, ctx.organizationId)));
         if (input.paymentAmount > 0)
           await tx
             .insert(posPayments)
             .values({
+              organizationId: ctx.organizationId,
               saleId,
               method: input.paymentMethod,
               amount: money(input.paymentAmount),
@@ -1938,6 +2090,7 @@ export const posRouter = router({
         await tx
           .insert(saleItems)
           .values({
+            organizationId: ctx.organizationId,
             saleId,
             serviceId: service?.id || null,
             inventoryItemId: linkedStock?.id || null,
@@ -1959,10 +2112,11 @@ export const posRouter = router({
           await tx
             .update(inventoryItems)
             .set({ quantity: money(after) })
-            .where(eq(inventoryItems.id, effectiveLinkedStock.id));
+            .where(and(eq(inventoryItems.id, effectiveLinkedStock.id), orgScope(inventoryItems, ctx.organizationId)));
           await tx
             .insert(stockMovements)
             .values({
+              organizationId: ctx.organizationId,
               inventoryItemId: effectiveLinkedStock.id,
               movementType: "sale",
               quantityChange: money(-stockNeeded),
@@ -1977,6 +2131,7 @@ export const posRouter = router({
         const invoiceResult = await tx
           .insert(invoices)
           .values({
+            organizationId: ctx.organizationId,
             saleId,
             invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`,
             status: paymentStatus,
@@ -1988,6 +2143,7 @@ export const posRouter = router({
           await tx
             .insert(invoicePayments)
             .values({
+              organizationId: ctx.organizationId,
               invoiceId,
               amount: money(input.paymentAmount),
               paymentMethod: input.paymentMethod,
@@ -2002,7 +2158,7 @@ export const posRouter = router({
         return { orderId, saleId, invoiceId };
       });
       await audit(
-        ctx.user.id,
+        ctx.user.id, ctx.organizationId,
         "POS_TAILORING_CHECKOUT_COMPLETED",
         "tailoringOrder",
         transaction.orderId,

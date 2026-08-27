@@ -48,7 +48,12 @@ import {
 } from "./inventoryQuantity";
 export { rollDerivedQuantity } from "./inventoryQuantity";
 import { storageGetSignedUrl, storagePut } from "./storage";
-import { protectedProcedure, router } from "./_core/trpc";
+import { tenantProcedure, router } from "./_core/trpc";
+import { orgScope } from "./_core/tenantDb";
+import { ENV } from "./_core/env";
+import { hashOpaqueToken, randomToken } from "./_core/localAuth";
+
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const adminRoles: BusinessRole[] = ["admin"];
 const salesRoles: BusinessRole[] = ["admin", "sales"];
@@ -288,46 +293,43 @@ async function dbOrThrow() {
     });
   return db;
 }
+/**
+ * Verifies the caller has an active business role (or owner-assigned custom
+ * role) permitted to perform this action, *within their own organization*.
+ * Every lookup is scoped by organizationId: userBusinessRoles/userCustomRoles
+ * rows are 1:1 with a user (unique on userId) so the organizationId filter
+ * can never match a row belonging to a different org than the caller's own,
+ * but it is included on every lookup here regardless, on the same
+ * always-filter discipline as every other tenant-table query in this file.
+ *
+ * Membership is always created atomically at org-creation or invite-
+ * acceptance time (server/db.ts) now, so a missing row here is a real error,
+ * not a "pending approval" state to tolerate.
+ */
 async function access(
   userId: number,
-  frameworkRole: "user" | "admin",
+  organizationId: number,
   allowed: BusinessRole[]
 ) {
   const db = await dbOrThrow();
-  let record = (
+  const record = (
     await db
       .select()
       .from(userBusinessRoles)
-      .where(eq(userBusinessRoles.userId, userId))
+      .where(
+        and(
+          eq(userBusinessRoles.userId, userId),
+          orgScope(userBusinessRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
-  if (!record) {
-    if (frameworkRole !== "admin") {
-      const request = (
-        await db
-          .select()
-          .from(pendingAccessRequests)
-          .where(eq(pendingAccessRequests.userId, userId))
-          .limit(1)
-      )[0];
-      const message =
-        request?.status === "rejected"
-          ? "Your ERP access request was not approved. Contact the shop owner."
-          : "Your ERP access request is awaiting owner approval.";
-      throw new TRPCError({ code: "FORBIDDEN", message });
-    }
-    await db
-      .insert(userBusinessRoles)
-      .values({ userId, role: "admin", isActive: true });
-    record = (
-      await db
-        .select()
-        .from(userBusinessRoles)
-        .where(eq(userBusinessRoles.userId, userId))
-        .limit(1)
-    )[0];
-  }
-  if (!record?.isActive)
+  if (!record)
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Your ERP access could not be verified.",
+    });
+  if (!record.isActive)
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Your ERP access is inactive.",
@@ -337,7 +339,12 @@ async function access(
     await db
       .select()
       .from(userCustomRoles)
-      .where(eq(userCustomRoles.userId, userId))
+      .where(
+        and(
+          eq(userCustomRoles.userId, userId),
+          orgScope(userCustomRoles, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (assignment) {
@@ -345,7 +352,12 @@ async function access(
       await db
         .select()
         .from(customRoles)
-        .where(eq(customRoles.id, assignment.customRoleId))
+        .where(
+          and(
+            eq(customRoles.id, assignment.customRoleId),
+            orgScope(customRoles, organizationId)
+          )
+        )
         .limit(1)
     )[0];
     const permissions = Array.isArray(role?.permissionsJson)
@@ -373,21 +385,21 @@ async function access(
 }
 async function audit(
   userId: number,
+  organizationId: number,
   action: string,
   entityType: string,
   entityId?: number,
   details?: unknown
 ) {
   const db = await dbOrThrow();
-  await db
-    .insert(auditLogs)
-    .values({
-      actorId: userId,
-      action,
-      entityType,
-      entityId,
-      detailsJson: details ? JSON.stringify(details) : null,
-    });
+  await db.insert(auditLogs).values({
+    organizationId,
+    actorId: userId,
+    action,
+    entityType,
+    entityId,
+    detailsJson: details ? JSON.stringify(details) : null,
+  });
 }
 const customerInput = z.object({
   name: z.string().min(2).max(160),
@@ -434,8 +446,8 @@ const tailoringOrderInput = z.object({
 
 export const erpRouter = router({
   shop: router({
-    get: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, [
+    get: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, [
         "admin",
         "sales",
         "inventory",
@@ -445,10 +457,11 @@ export const erpRouter = router({
       return (await dbOrThrow())
         .select()
         .from(shopSettings)
+        .where(orgScope(shopSettings, ctx.organizationId))
         .limit(1)
         .then(rows => rows[0] || null);
     }),
-    save: protectedProcedure
+    save: tenantProcedure
       .input(
         z.object({
           shopName: z.string().min(2),
@@ -466,7 +479,7 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const values = {
           ...input,
@@ -474,15 +487,29 @@ export const erpRouter = router({
           vatNumber: input.vatNumber || null,
           updatedBy: ctx.user.id,
         };
-        const existing = (await db.select().from(shopSettings).limit(1))[0];
+        const existing = (
+          await db
+            .select()
+            .from(shopSettings)
+            .where(orgScope(shopSettings, ctx.organizationId))
+            .limit(1)
+        )[0];
         if (existing)
           await db
             .update(shopSettings)
             .set(values)
-            .where(eq(shopSettings.id, existing.id));
-        else await db.insert(shopSettings).values(values);
+            .where(
+              and(
+                eq(shopSettings.id, existing.id),
+                orgScope(shopSettings, ctx.organizationId)
+              )
+            );
+        else
+          await db
+            .insert(shopSettings)
+            .values({ ...values, organizationId: ctx.organizationId });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "SHOP_SETTINGS_SAVED",
           "shopSettings",
           existing?.id
@@ -490,10 +517,10 @@ export const erpRouter = router({
         return { success: true };
       }),
   }),
-  dashboard: protectedProcedure
+  dashboard: tenantProcedure
     .input(dashboardInput.optional())
     .query(async ({ ctx, input }) => {
-      await access(ctx.user.id, ctx.user.role, [
+      await access(ctx.user.id, ctx.organizationId, [
         "admin",
         "sales",
         "inventory",
@@ -507,24 +534,29 @@ export const erpRouter = router({
           ? getCustomDashboardRange(input.startDate, input.endDate)
           : null;
       const rangeStart = customRange?.start || getDashboardRangeStart(range);
-      const salesWhere = customRange
-        ? and(
-            gte(sales.createdAt, customRange.start),
-            lte(sales.createdAt, customRange.end)
-          )
-        : rangeStart
-          ? gte(sales.createdAt, rangeStart)
-          : undefined;
+      const orgId = ctx.organizationId;
+      const salesWhere = and(
+        orgScope(sales, orgId),
+        customRange
+          ? and(
+              gte(sales.createdAt, customRange.start),
+              lte(sales.createdAt, customRange.end)
+            )
+          : rangeStart
+            ? gte(sales.createdAt, rangeStart)
+            : undefined
+      );
       const today = getDashboardRangeStart("today")!;
       const weekStart = getDashboardRangeStart("7d")!;
       const monthStart = getDashboardRangeStart("30d")!;
       const [customerCount] = await db
         .select({ count: sql<number>`count(*)` })
-        .from(customers);
+        .from(customers)
+        .where(orgScope(customers, orgId));
       const [inventoryCount] = await db
         .select({ count: sql<number>`count(*)` })
         .from(inventoryItems)
-        .where(eq(inventoryItems.isActive, true));
+        .where(and(orgScope(inventoryItems, orgId), eq(inventoryItems.isActive, true)));
       const [rangeMetrics] = await db
         .select({
           total: sql<string>`coalesce(sum(${sales.total}), 0)`,
@@ -535,20 +567,23 @@ export const erpRouter = router({
       const [todayMetrics] = await db
         .select({ total: sql<string>`coalesce(sum(${sales.total}), 0)` })
         .from(sales)
-        .where(gte(sales.createdAt, today));
+        .where(and(orgScope(sales, orgId), gte(sales.createdAt, today)));
       const [weekMetrics] = await db
         .select({ total: sql<string>`coalesce(sum(${sales.total}), 0)` })
         .from(sales)
-        .where(gte(sales.createdAt, weekStart));
+        .where(and(orgScope(sales, orgId), gte(sales.createdAt, weekStart)));
       const [monthMetrics] = await db
         .select({ total: sql<string>`coalesce(sum(${sales.total}), 0)` })
         .from(sales)
-        .where(gte(sales.createdAt, monthStart));
+        .where(and(orgScope(sales, orgId), gte(sales.createdAt, monthStart)));
       const low = await db
         .select()
         .from(inventoryItems)
         .where(
-          sql`${inventoryItems.quantity} <= ${inventoryItems.minThreshold}`
+          and(
+            orgScope(inventoryItems, orgId),
+            sql`${inventoryItems.quantity} <= ${inventoryItems.minThreshold}`
+          )
         )
         .orderBy(inventoryItems.quantity)
         .limit(8);
@@ -577,18 +612,18 @@ export const erpRouter = router({
         })
         .from(saleItems)
         .innerJoin(sales, eq(saleItems.saleId, sales.id))
-        .where(salesWhere)
+        .where(and(orgScope(saleItems, orgId), salesWhere))
         .groupBy(saleItems.nameSnapshot)
         .orderBy(desc(sql`sum(${saleItems.lineTotal})`))
         .limit(5);
       const [activeStaff] = await db
         .select({ count: sql<number>`count(*)` })
         .from(staffProfiles)
-        .where(eq(staffProfiles.isActive, true));
+        .where(and(orgScope(staffProfiles, orgId), eq(staffProfiles.isActive, true)));
       const attendanceToday = await db
         .select({ status: attendance.status, count: sql<number>`count(*)` })
         .from(attendance)
-        .where(eq(attendance.workDate, today))
+        .where(and(orgScope(attendance, orgId), eq(attendance.workDate, today)))
         .groupBy(attendance.status);
       const attendanceSummary = attendanceToday.reduce(
         (summary, item) => ({
@@ -627,21 +662,22 @@ export const erpRouter = router({
       };
     }),
   customers: router({
-    list: protectedProcedure
+    list: tenantProcedure
       .input(z.object({ search: z.string().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, ["admin", "sales", "tailor"]);
+        await access(ctx.user.id, ctx.organizationId, ["admin", "sales", "tailor"]);
         const db = await dbOrThrow();
         const search = input?.search?.trim();
-        const where = search
-          ? and(
-              eq(customers.isActive, true),
-              or(
+        const where = and(
+          orgScope(customers, ctx.organizationId),
+          eq(customers.isActive, true),
+          search
+            ? or(
                 like(customers.name, `%${search}%`),
                 like(customers.phone, `%${search}%`)
               )
-            )
-          : eq(customers.isActive, true);
+            : undefined
+        );
         return db
           .select()
           .from(customers)
@@ -649,28 +685,29 @@ export const erpRouter = router({
           .orderBy(desc(customers.createdAt))
           .limit(20);
       }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(customerInput)
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const result = await db
           .insert(customers)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             email: input.email || null,
             address: input.address || null,
             notes: input.notes || null,
           })
           .returning({ id: customers.id });
         const customerId = id(result);
-        await audit(ctx.user.id, "CUSTOMER_CREATED", "customer", customerId);
+        await audit(ctx.user.id, ctx.organizationId, "CUSTOMER_CREATED", "customer", customerId);
         return { id: customerId };
       }),
-    update: protectedProcedure
+    update: tenantProcedure
       .input(customerInput.extend({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         await db
           .update(customers)
@@ -680,20 +717,20 @@ export const erpRouter = router({
             address: input.address || null,
             notes: input.notes || null,
           })
-          .where(eq(customers.id, input.id));
-        await audit(ctx.user.id, "CUSTOMER_UPDATED", "customer", input.id);
+          .where(and(eq(customers.id, input.id), orgScope(customers, ctx.organizationId)));
+        await audit(ctx.user.id, ctx.organizationId, "CUSTOMER_UPDATED", "customer", input.id);
         return { success: true };
       }),
-    remove: protectedProcedure
+    remove: tenantProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const customer = (
           await db
             .select({ id: customers.id, name: customers.name })
             .from(customers)
-            .where(eq(customers.id, input.id))
+            .where(and(eq(customers.id, input.id), orgScope(customers, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!customer)
@@ -704,22 +741,22 @@ export const erpRouter = router({
         await db
           .update(customers)
           .set({ isActive: false, updatedAt: new Date() })
-          .where(eq(customers.id, input.id));
-        await audit(ctx.user.id, "CUSTOMER_ARCHIVED", "customer", input.id, {
+          .where(and(eq(customers.id, input.id), orgScope(customers, ctx.organizationId)));
+        await audit(ctx.user.id, ctx.organizationId, "CUSTOMER_ARCHIVED", "customer", input.id, {
           name: customer.name,
         });
         return { success: true, id: input.id, name: customer.name };
       }),
-    balance: protectedProcedure
+    balance: tenantProcedure
       .input(z.object({ customerId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const customer = (
           await db
             .select()
             .from(customers)
-            .where(eq(customers.id, input.customerId))
+            .where(and(eq(customers.id, input.customerId), orgScope(customers, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!customer)
@@ -730,7 +767,7 @@ export const erpRouter = router({
         const rows = await db
           .select()
           .from(sales)
-          .where(eq(sales.customerId, input.customerId))
+          .where(and(eq(sales.customerId, input.customerId), orgScope(sales, ctx.organizationId)))
           .orderBy(desc(sales.createdAt))
           .limit(500);
         const balance = rows.reduce(
@@ -754,7 +791,7 @@ export const erpRouter = router({
             })),
         };
       }),
-    sendBalance: protectedProcedure
+    sendBalance: tenantProcedure
       .input(
         z.object({
           customerId: z.number().int().positive(),
@@ -764,13 +801,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const customer = (
           await db
             .select()
             .from(customers)
-            .where(eq(customers.id, input.customerId))
+            .where(and(eq(customers.id, input.customerId), orgScope(customers, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!customer)
@@ -792,7 +829,7 @@ export const erpRouter = router({
           await db
             .select()
             .from(sales)
-            .where(eq(sales.customerId, input.customerId))
+            .where(and(eq(sales.customerId, input.customerId), orgScope(sales, ctx.organizationId)))
             .limit(500)
         ).reduce(
           (sum, sale) =>
@@ -805,6 +842,7 @@ export const erpRouter = router({
         const result = await db
           .insert(customerBalanceDeliveries)
           .values({
+            organizationId: ctx.organizationId,
             customerId: customer.id,
             channel: input.channel,
             recipient,
@@ -814,7 +852,7 @@ export const erpRouter = router({
           })
           .returning({ id: customerBalanceDeliveries.id });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "CUSTOMER_BALANCE_DELIVERY_PREPARED",
           "customer",
           customer.id,
@@ -828,17 +866,22 @@ export const erpRouter = router({
           message,
         };
       }),
-    measurements: protectedProcedure
+    measurements: tenantProcedure
       .input(z.object({ customerId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, ["admin", "sales", "tailor"]);
+        await access(ctx.user.id, ctx.organizationId, ["admin", "sales", "tailor"]);
         return (await dbOrThrow())
           .select()
           .from(measurementProfiles)
-          .where(eq(measurementProfiles.customerId, input.customerId))
+          .where(
+            and(
+              eq(measurementProfiles.customerId, input.customerId),
+              orgScope(measurementProfiles, ctx.organizationId)
+            )
+          )
           .orderBy(desc(measurementProfiles.version));
       }),
-    addMeasurement: protectedProcedure
+    addMeasurement: tenantProcedure
       .input(
         z.object({
           customerId: z.number().int(),
@@ -851,18 +894,24 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, ["admin", "tailor", "sales"]);
+        await access(ctx.user.id, ctx.organizationId, ["admin", "tailor", "sales"]);
         const db = await dbOrThrow();
         const latest = (
           await db
             .select({ version: max(measurementProfiles.version) })
             .from(measurementProfiles)
-            .where(eq(measurementProfiles.customerId, input.customerId))
+            .where(
+              and(
+                eq(measurementProfiles.customerId, input.customerId),
+                orgScope(measurementProfiles, ctx.organizationId)
+              )
+            )
         )[0];
         const result = await db
           .insert(measurementProfiles)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             measurementsJson: input.measurements,
             version: Number(latest?.version || 0) + 1,
             effectiveDate: new Date(input.effectiveDate),
@@ -871,7 +920,7 @@ export const erpRouter = router({
           .returning({ id: measurementProfiles.id });
         const profileId = id(result);
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "MEASUREMENT_VERSION_CREATED",
           "measurementProfile",
           profileId
@@ -880,20 +929,25 @@ export const erpRouter = router({
       }),
   }),
   inventory: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, ["admin", "sales", "inventory"]);
+    list: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, ["admin", "sales", "inventory"]);
       const db = await dbOrThrow();
       const items = await db
         .select()
         .from(inventoryItems)
-        .where(eq(inventoryItems.isActive, true))
+        .where(and(orgScope(inventoryItems, ctx.organizationId), eq(inventoryItems.isActive, true)))
         .orderBy(inventoryItems.name);
       const ids = items.map(item => item.id);
       const movementRows = ids.length
         ? await db
             .select({ inventoryItemId: stockMovements.inventoryItemId })
             .from(stockMovements)
-            .where(inArray(stockMovements.inventoryItemId, ids))
+            .where(
+              and(
+                orgScope(stockMovements, ctx.organizationId),
+                inArray(stockMovements.inventoryItemId, ids)
+              )
+            )
             .groupBy(stockMovements.inventoryItemId)
         : [];
       const movementIds = new Set(movementRows.map(row => row.inventoryItemId));
@@ -910,7 +964,7 @@ export const erpRouter = router({
         ),
       }));
     }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(
         z.object({
           code: z.string().min(1),
@@ -937,7 +991,7 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, inventoryRoles);
+        await access(ctx.user.id, ctx.organizationId, inventoryRoles);
         const db = await dbOrThrow();
         const openingQuantity =
           rollDerivedQuantity(
@@ -949,6 +1003,7 @@ export const erpRouter = router({
           .insert(inventoryItems)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             color: input.color || null,
             size: input.size || null,
             widthInches: input.widthInches?.toString(),
@@ -965,6 +1020,7 @@ export const erpRouter = router({
           await db
             .insert(stockMovements)
             .values({
+              organizationId: ctx.organizationId,
               inventoryItemId: itemId,
               movementType: "opening",
               quantityChange: three(openingQuantity),
@@ -973,10 +1029,10 @@ export const erpRouter = router({
               createdBy: ctx.user.id,
               notes: "Opening balance",
             });
-        await audit(ctx.user.id, "INVENTORY_CREATED", "inventoryItem", itemId);
+        await audit(ctx.user.id, ctx.organizationId, "INVENTORY_CREATED", "inventoryItem", itemId);
         return { id: itemId };
       }),
-    update: protectedProcedure
+    update: tenantProcedure
       .input(
         z.object({
           id: z.number().int().positive(),
@@ -1003,13 +1059,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, inventoryRoles);
+        await access(ctx.user.id, ctx.organizationId, inventoryRoles);
         const db = await dbOrThrow();
         const item = (
           await db
             .select()
             .from(inventoryItems)
-            .where(eq(inventoryItems.id, input.id))
+            .where(and(eq(inventoryItems.id, input.id), orgScope(inventoryItems, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!item)
@@ -1046,11 +1102,12 @@ export const erpRouter = router({
               rollCount: input.rollCount,
               metersPerRoll: input.metersPerRoll?.toString() || null,
             })
-            .where(eq(inventoryItems.id, input.id));
+            .where(and(eq(inventoryItems.id, input.id), orgScope(inventoryItems, ctx.organizationId)));
           if (seedQuantity !== null && seedQuantity > 0)
             await tx
               .insert(stockMovements)
               .values({
+                organizationId: ctx.organizationId,
                 inventoryItemId: input.id,
                 movementType: "opening",
                 quantityChange: three(seedQuantity),
@@ -1062,7 +1119,7 @@ export const erpRouter = router({
               });
         });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "INVENTORY_UPDATED",
           "inventoryItem",
           input.id,
@@ -1074,7 +1131,7 @@ export const erpRouter = router({
         );
         return { success: true };
       }),
-    adjust: protectedProcedure
+    adjust: tenantProcedure
       .input(
         z.object({
           inventoryItemId: z.number().int(),
@@ -1084,13 +1141,18 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, inventoryRoles);
+        await access(ctx.user.id, ctx.organizationId, inventoryRoles);
         const db = await dbOrThrow();
         const item = (
           await db
             .select()
             .from(inventoryItems)
-            .where(eq(inventoryItems.id, input.inventoryItemId))
+            .where(
+              and(
+                eq(inventoryItems.id, input.inventoryItemId),
+                orgScope(inventoryItems, ctx.organizationId)
+              )
+            )
             .limit(1)
         )[0];
         if (!item)
@@ -1126,10 +1188,11 @@ export const erpRouter = router({
         await db
           .update(inventoryItems)
           .set({ quantity: three(after), rollCount: rollCountAfter })
-          .where(eq(inventoryItems.id, item.id));
+          .where(and(eq(inventoryItems.id, item.id), orgScope(inventoryItems, ctx.organizationId)));
         await db
           .insert(stockMovements)
           .values({
+            organizationId: ctx.organizationId,
             inventoryItemId: item.id,
             movementType: "adjustment",
             quantityChange: three(effectiveQuantityChange),
@@ -1139,7 +1202,7 @@ export const erpRouter = router({
             notes: input.notes || null,
           });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "STOCK_ADJUSTED",
           "inventoryItem",
           item.id,
@@ -1147,16 +1210,16 @@ export const erpRouter = router({
         );
         return { quantity: after };
       }),
-    remove: protectedProcedure
+    remove: tenantProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, inventoryRoles);
+        await access(ctx.user.id, ctx.organizationId, inventoryRoles);
         const db = await dbOrThrow();
         const item = (
           await db
             .select({ id: inventoryItems.id, name: inventoryItems.name })
             .from(inventoryItems)
-            .where(eq(inventoryItems.id, input.id))
+            .where(and(eq(inventoryItems.id, input.id), orgScope(inventoryItems, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!item)
@@ -1167,9 +1230,9 @@ export const erpRouter = router({
         await db
           .update(inventoryItems)
           .set({ isActive: false, updatedAt: new Date() })
-          .where(eq(inventoryItems.id, input.id));
+          .where(and(eq(inventoryItems.id, input.id), orgScope(inventoryItems, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "INVENTORY_ARCHIVED",
           "inventoryItem",
           input.id,
@@ -1179,8 +1242,8 @@ export const erpRouter = router({
       }),
   }),
   services: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, catalogRoles);
+    list: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, catalogRoles);
       const records = await (await dbOrThrow())
         .select({ service: services, inventory: inventoryItems })
         .from(services)
@@ -1188,7 +1251,7 @@ export const erpRouter = router({
           inventoryItems,
           eq(services.inventoryItemId, inventoryItems.id)
         )
-        .where(eq(services.isActive, true))
+        .where(and(orgScope(services, ctx.organizationId), eq(services.isActive, true)))
         .orderBy(services.name);
       return records.map(record => ({
         ...record.service,
@@ -1204,7 +1267,7 @@ export const erpRouter = router({
           : null,
       }));
     }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(
         z.object({
           sku: z.string().min(1),
@@ -1223,33 +1286,35 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, inventoryRoles);
+        await access(ctx.user.id, ctx.organizationId, inventoryRoles);
         const result = await (
           await dbOrThrow()
         )
           .insert(services)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             description: input.description || null,
             unitPrice: three(input.unitPrice),
             defaultFabricMeters: input.defaultFabricMeters?.toString(),
           })
           .returning({ id: services.id });
         const serviceId = id(result);
-        await audit(ctx.user.id, "SERVICE_CREATED", "service", serviceId);
+        await audit(ctx.user.id, ctx.organizationId, "SERVICE_CREATED", "service", serviceId);
         return { id: serviceId };
       }),
   }),
   sales: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, salesRoles);
+    list: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, salesRoles);
       return (await dbOrThrow())
         .select()
         .from(sales)
+        .where(orgScope(sales, ctx.organizationId))
         .orderBy(desc(sales.createdAt))
         .limit(100);
     }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(
         z.object({
           customerId: z.number().int().optional(),
@@ -1277,9 +1342,15 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
-        const shop = (await db.select().from(shopSettings).limit(1))[0];
+        const shop = (
+          await db
+            .select()
+            .from(shopSettings)
+            .where(orgScope(shopSettings, ctx.organizationId))
+            .limit(1)
+        )[0];
         const subtotal = input.items.reduce(
           (sum, item) => sum + item.quantity * item.unitPrice,
           0
@@ -1291,6 +1362,7 @@ export const erpRouter = router({
           const saleResult = await tx
             .insert(sales)
             .values({
+              organizationId: ctx.organizationId,
               saleNumber,
               customerId: input.customerId,
               customerNameSnapshot: input.customerName,
@@ -1308,6 +1380,7 @@ export const erpRouter = router({
             await tx
               .insert(saleItems)
               .values({
+                organizationId: ctx.organizationId,
                 saleId: createdId,
                 serviceId: item.serviceId,
                 inventoryItemId: item.inventoryItemId,
@@ -1321,7 +1394,12 @@ export const erpRouter = router({
                 await tx
                   .select()
                   .from(inventoryItems)
-                  .where(eq(inventoryItems.id, item.inventoryItemId))
+                  .where(
+                    and(
+                      eq(inventoryItems.id, item.inventoryItemId),
+                      orgScope(inventoryItems, ctx.organizationId)
+                    )
+                  )
                   .limit(1)
               )[0];
               if (!stock)
@@ -1339,10 +1417,11 @@ export const erpRouter = router({
               await tx
                 .update(inventoryItems)
                 .set({ quantity: three(after) })
-                .where(eq(inventoryItems.id, stock.id));
+                .where(and(eq(inventoryItems.id, stock.id), orgScope(inventoryItems, ctx.organizationId)));
               await tx
                 .insert(stockMovements)
                 .values({
+                  organizationId: ctx.organizationId,
                   inventoryItemId: stock.id,
                   movementType: "sale",
                   quantityChange: three(-item.quantity),
@@ -1358,25 +1437,31 @@ export const erpRouter = router({
           await tx
             .insert(invoices)
             .values({
+              organizationId: ctx.organizationId,
               saleId: createdId,
               invoiceNumber: `${invoicePrefix}-${String(createdId).padStart(6, "0")}`,
               status: input.paymentStatus,
             });
           return createdId;
         });
-        await audit(ctx.user.id, "SALE_COMPLETED", "sale", saleId, { total });
+        await audit(ctx.user.id, ctx.organizationId, "SALE_COMPLETED", "sale", saleId, { total });
         return { id: saleId, total };
       }),
   }),
   salesHistory: router({
-    list: protectedProcedure
+    list: tenantProcedure
       .input(salesHistoryInput.optional())
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const [saleRows, invoiceRows] = await Promise.all([
-          db.select().from(sales).orderBy(desc(sales.createdAt)).limit(500),
-          db.select().from(invoices),
+          db
+            .select()
+            .from(sales)
+            .where(orgScope(sales, ctx.organizationId))
+            .orderBy(desc(sales.createdAt))
+            .limit(500),
+          db.select().from(invoices).where(orgScope(invoices, ctx.organizationId)),
         ]);
         const invoiceBySale = new Map(
           invoiceRows.map(invoice => [invoice.saleId, invoice])
@@ -1408,19 +1493,25 @@ export const erpRouter = router({
             invoice: invoiceBySale.get(sale.id) || null,
           }));
       }),
-    monthlyReport: protectedProcedure
+    monthlyReport: tenantProcedure
       .input(monthInput)
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const { start, end } = getMonthWindow(input.month);
         const [allSales, invoiceRows, allItems, shop] = await Promise.all([
-          db.select().from(sales).orderBy(desc(sales.createdAt)).limit(1000),
-          db.select().from(invoices),
-          db.select().from(saleItems),
+          db
+            .select()
+            .from(sales)
+            .where(orgScope(sales, ctx.organizationId))
+            .orderBy(desc(sales.createdAt))
+            .limit(1000),
+          db.select().from(invoices).where(orgScope(invoices, ctx.organizationId)),
+          db.select().from(saleItems).where(orgScope(saleItems, ctx.organizationId)),
           db
             .select()
             .from(shopSettings)
+            .where(orgScope(shopSettings, ctx.organizationId))
             .limit(1)
             .then(rows => rows[0] || null),
         ]);
@@ -1494,10 +1585,10 @@ export const erpRouter = router({
       }),
   }),
   invoices: router({
-    list: protectedProcedure
+    list: tenantProcedure
       .input(invoiceListInput.optional())
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const search = input?.search?.trim().toLowerCase();
         const start = input?.startDate
@@ -1510,9 +1601,15 @@ export const erpRouter = router({
           db
             .select()
             .from(invoices)
+            .where(orgScope(invoices, ctx.organizationId))
             .orderBy(desc(invoices.issuedAt))
             .limit(500),
-          db.select().from(sales).orderBy(desc(sales.createdAt)).limit(500),
+          db
+            .select()
+            .from(sales)
+            .where(orgScope(sales, ctx.organizationId))
+            .orderBy(desc(sales.createdAt))
+            .limit(500),
         ]);
         const saleById = new Map(saleRows.map(sale => [sale.id, sale]));
         return invoiceRows
@@ -1537,16 +1634,16 @@ export const erpRouter = router({
                 ].some(value => value.toLowerCase().includes(search)))
           );
       }),
-    detail: protectedProcedure
+    detail: tenantProcedure
       .input(z.object({ invoiceId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const invoice = (
           await db
             .select()
             .from(invoices)
-            .where(eq(invoices.id, input.invoiceId))
+            .where(and(eq(invoices.id, input.invoiceId), orgScope(invoices, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!invoice)
@@ -1558,7 +1655,7 @@ export const erpRouter = router({
           await db
             .select()
             .from(sales)
-            .where(eq(sales.id, invoice.saleId))
+            .where(and(eq(sales.id, invoice.saleId), orgScope(sales, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!sale)
@@ -1569,35 +1666,42 @@ export const erpRouter = router({
         const items = await db
           .select()
           .from(saleItems)
-          .where(eq(saleItems.saleId, sale.id));
-        const shop = (await db.select().from(shopSettings).limit(1))[0] || null;
+          .where(and(eq(saleItems.saleId, sale.id), orgScope(saleItems, ctx.organizationId)));
+        const shop =
+          (
+            await db
+              .select()
+              .from(shopSettings)
+              .where(orgScope(shopSettings, ctx.organizationId))
+              .limit(1)
+          )[0] || null;
         const [deliveries, paymentRecords] = await Promise.all([
           db
             .select()
             .from(invoiceDeliveries)
-            .where(eq(invoiceDeliveries.invoiceId, invoice.id))
+            .where(and(eq(invoiceDeliveries.invoiceId, invoice.id), orgScope(invoiceDeliveries, ctx.organizationId)))
             .orderBy(desc(invoiceDeliveries.createdAt))
             .limit(20),
           db
             .select()
             .from(invoicePayments)
-            .where(eq(invoicePayments.invoiceId, invoice.id))
+            .where(and(eq(invoicePayments.invoiceId, invoice.id), orgScope(invoicePayments, ctx.organizationId)))
             .orderBy(invoicePayments.createdAt, invoicePayments.id)
             .limit(200),
         ]);
         return { invoice, sale, items, shop, deliveries, paymentRecords };
       }),
-    addPayment: protectedProcedure
+    addPayment: tenantProcedure
       .input(invoicePaymentInput)
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const result = await db.transaction(async tx => {
           const invoice = (
             await tx
               .select()
               .from(invoices)
-              .where(eq(invoices.id, input.invoiceId))
+              .where(and(eq(invoices.id, input.invoiceId), orgScope(invoices, ctx.organizationId)))
               .for("update")
               .limit(1)
           )[0];
@@ -1610,7 +1714,7 @@ export const erpRouter = router({
             await tx
               .select()
               .from(sales)
-              .where(eq(sales.id, invoice.saleId))
+              .where(and(eq(sales.id, invoice.saleId), orgScope(sales, ctx.organizationId)))
               .for("update")
               .limit(1)
           )[0];
@@ -1644,6 +1748,7 @@ export const erpRouter = router({
           const paymentResult = await tx
             .insert(invoicePayments)
             .values({
+              organizationId: ctx.organizationId,
               invoiceId: invoice.id,
               amount: amount.toFixed(3),
               paymentMethod: input.paymentMethod,
@@ -1660,6 +1765,7 @@ export const erpRouter = router({
           await tx
             .insert(posPayments)
             .values({
+              organizationId: ctx.organizationId,
               saleId: sale.id,
               method: input.paymentMethod,
               amount: amount.toFixed(3),
@@ -1673,11 +1779,11 @@ export const erpRouter = router({
               paymentStatus: nextStatus,
               paymentMethod: input.paymentMethod,
             })
-            .where(eq(sales.id, sale.id));
+            .where(and(eq(sales.id, sale.id), orgScope(sales, ctx.organizationId)));
           await tx
             .update(invoices)
             .set({ status: nextStatus })
-            .where(eq(invoices.id, invoice.id));
+            .where(and(eq(invoices.id, invoice.id), orgScope(invoices, ctx.organizationId)));
           return {
             invoice,
             sale,
@@ -1700,7 +1806,7 @@ export const erpRouter = router({
           };
         });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "INVOICE_PAYMENT_ADDED",
           "invoice",
           input.invoiceId,
@@ -1713,17 +1819,17 @@ export const erpRouter = router({
         );
         return result;
       }),
-    delete: protectedProcedure
+    delete: tenantProcedure
       .input(invoiceDeleteInput)
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const result = await db.transaction(async tx => {
           const invoice = (
             await tx
               .select()
               .from(invoices)
-              .where(eq(invoices.id, input.invoiceId))
+              .where(and(eq(invoices.id, input.invoiceId), orgScope(invoices, ctx.organizationId)))
               .for("update")
               .limit(1)
           )[0];
@@ -1736,7 +1842,7 @@ export const erpRouter = router({
             await tx
               .select()
               .from(sales)
-              .where(eq(sales.id, invoice.saleId))
+              .where(and(eq(sales.id, invoice.saleId), orgScope(sales, ctx.organizationId)))
               .for("update")
               .limit(1)
           )[0];
@@ -1748,7 +1854,7 @@ export const erpRouter = router({
           const lines = await tx
             .select()
             .from(saleItems)
-            .where(eq(saleItems.saleId, sale.id));
+            .where(and(eq(saleItems.saleId, sale.id), orgScope(saleItems, ctx.organizationId)));
           const stockLines = lines.filter(
             line => line.inventoryItemId && Number(line.quantity) > 0
           );
@@ -1757,7 +1863,12 @@ export const erpRouter = router({
               await tx
                 .select()
                 .from(inventoryItems)
-                .where(eq(inventoryItems.id, line.inventoryItemId!))
+                .where(
+                  and(
+                    eq(inventoryItems.id, line.inventoryItemId!),
+                    orgScope(inventoryItems, ctx.organizationId)
+                  )
+                )
                 .for("update")
                 .limit(1)
             )[0];
@@ -1767,10 +1878,11 @@ export const erpRouter = router({
             await tx
               .update(inventoryItems)
               .set({ quantity: three(quantityAfter) })
-              .where(eq(inventoryItems.id, item.id));
+              .where(and(eq(inventoryItems.id, item.id), orgScope(inventoryItems, ctx.organizationId)));
             await tx
               .insert(stockMovements)
               .values({
+                organizationId: ctx.organizationId,
                 inventoryItemId: item.id,
                 movementType: "return",
                 quantityChange: three(Number(line.quantity)),
@@ -1785,17 +1897,25 @@ export const erpRouter = router({
           await tx
             .update(tailoringOrders)
             .set({ saleId: null, updatedAt: new Date() })
-            .where(eq(tailoringOrders.saleId, sale.id));
+            .where(and(eq(tailoringOrders.saleId, sale.id), orgScope(tailoringOrders, ctx.organizationId)));
           await tx
             .delete(invoiceDeliveries)
-            .where(eq(invoiceDeliveries.invoiceId, invoice.id));
+            .where(and(eq(invoiceDeliveries.invoiceId, invoice.id), orgScope(invoiceDeliveries, ctx.organizationId)));
           await tx
             .delete(invoicePayments)
-            .where(eq(invoicePayments.invoiceId, invoice.id));
-          await tx.delete(posPayments).where(eq(posPayments.saleId, sale.id));
-          await tx.delete(saleItems).where(eq(saleItems.saleId, sale.id));
-          await tx.delete(invoices).where(eq(invoices.id, invoice.id));
-          await tx.delete(sales).where(eq(sales.id, sale.id));
+            .where(and(eq(invoicePayments.invoiceId, invoice.id), orgScope(invoicePayments, ctx.organizationId)));
+          await tx
+            .delete(posPayments)
+            .where(and(eq(posPayments.saleId, sale.id), orgScope(posPayments, ctx.organizationId)));
+          await tx
+            .delete(saleItems)
+            .where(and(eq(saleItems.saleId, sale.id), orgScope(saleItems, ctx.organizationId)));
+          await tx
+            .delete(invoices)
+            .where(and(eq(invoices.id, invoice.id), orgScope(invoices, ctx.organizationId)));
+          await tx
+            .delete(sales)
+            .where(and(eq(sales.id, sale.id), orgScope(sales, ctx.organizationId)));
           return {
             invoiceNumber: invoice.invoiceNumber,
             saleNumber: sale.saleNumber,
@@ -1803,7 +1923,7 @@ export const erpRouter = router({
           };
         });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "INVOICE_DELETED",
           "invoice",
           input.invoiceId,
@@ -1811,7 +1931,7 @@ export const erpRouter = router({
         );
         return result;
       }),
-    prepareDelivery: protectedProcedure
+    prepareDelivery: tenantProcedure
       .input(
         z.object({
           invoiceId: z.number().int().positive(),
@@ -1821,13 +1941,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, salesRoles);
+        await access(ctx.user.id, ctx.organizationId, salesRoles);
         const db = await dbOrThrow();
         const invoice = (
           await db
             .select()
             .from(invoices)
-            .where(eq(invoices.id, input.invoiceId))
+            .where(and(eq(invoices.id, input.invoiceId), orgScope(invoices, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!invoice)
@@ -1838,6 +1958,7 @@ export const erpRouter = router({
         const result = await db
           .insert(invoiceDeliveries)
           .values({
+            organizationId: ctx.organizationId,
             invoiceId: input.invoiceId,
             channel: input.channel,
             recipient: input.recipient || null,
@@ -1848,7 +1969,7 @@ export const erpRouter = router({
           .returning({ id: invoiceDeliveries.id });
         const deliveryId = id(result);
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "INVOICE_DELIVERY_PREPARED",
           "invoice",
           input.invoiceId,
@@ -1859,26 +1980,31 @@ export const erpRouter = router({
   }),
   staff: router({
     documents: router({
-      list: protectedProcedure
+      list: tenantProcedure
         .input(z.object({ staffProfileId: z.number().int().positive() }))
         .query(async ({ ctx, input }) => {
-          await access(ctx.user.id, ctx.user.role, payrollRoles);
+          await access(ctx.user.id, ctx.organizationId, payrollRoles);
           return (await dbOrThrow())
             .select()
             .from(staffDocuments)
-            .where(eq(staffDocuments.staffProfileId, input.staffProfileId))
+            .where(
+              and(
+                eq(staffDocuments.staffProfileId, input.staffProfileId),
+                orgScope(staffDocuments, ctx.organizationId)
+              )
+            )
             .orderBy(desc(staffDocuments.uploadedAt))
             .limit(100);
         }),
-      download: protectedProcedure
+      download: tenantProcedure
         .input(z.object({ documentId: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
-          await access(ctx.user.id, ctx.user.role, payrollRoles);
+          await access(ctx.user.id, ctx.organizationId, payrollRoles);
           const document = (
             await (await dbOrThrow())
               .select()
               .from(staffDocuments)
-              .where(eq(staffDocuments.id, input.documentId))
+              .where(and(eq(staffDocuments.id, input.documentId), orgScope(staffDocuments, ctx.organizationId)))
               .limit(1)
           )[0];
           if (!document)
@@ -1892,7 +2018,7 @@ export const erpRouter = router({
             contentType: document.contentType,
           };
         }),
-      upload: protectedProcedure
+      upload: tenantProcedure
         .input(
           z
             .object({
@@ -1919,12 +2045,12 @@ export const erpRouter = router({
             })
         )
         .mutation(async ({ ctx, input }) => {
-          await access(ctx.user.id, ctx.user.role, payrollRoles);
+          await access(ctx.user.id, ctx.organizationId, payrollRoles);
           const profile = (
             await (await dbOrThrow())
               .select({ id: staffProfiles.id })
               .from(staffProfiles)
-              .where(eq(staffProfiles.id, input.staffProfileId))
+              .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)))
               .limit(1)
           )[0];
           if (!profile)
@@ -1941,6 +2067,7 @@ export const erpRouter = router({
           const result = await (await dbOrThrow())
             .insert(staffDocuments)
             .values({
+              organizationId: ctx.organizationId,
               staffProfileId: input.staffProfileId,
               label: input.label,
               fileName: input.fileName,
@@ -1952,7 +2079,7 @@ export const erpRouter = router({
             .returning({ id: staffDocuments.id });
           const documentId = id(result);
           await audit(
-            ctx.user.id,
+            ctx.user.id, ctx.organizationId,
             "STAFF_DOCUMENT_UPLOADED",
             "staffDocument",
             documentId,
@@ -1961,15 +2088,15 @@ export const erpRouter = router({
           return { id: documentId, url: stored.url };
         }),
     }),
-    list: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, staffDirectoryRoles);
+    list: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, staffDirectoryRoles);
       return (await dbOrThrow())
         .select()
         .from(staffProfiles)
-        .where(eq(staffProfiles.isActive, true))
+        .where(and(orgScope(staffProfiles, ctx.organizationId), eq(staffProfiles.isActive, true)))
         .orderBy(staffProfiles.name);
     }),
-    linkAccess: protectedProcedure
+    linkAccess: tenantProcedure
       .input(
         z.object({
           staffProfileId: z.number().int().positive(),
@@ -1977,13 +2104,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const profile = (
           await db
             .select()
             .from(staffProfiles)
-            .where(eq(staffProfiles.id, input.staffProfileId))
+            .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!profile)
@@ -1995,7 +2122,7 @@ export const erpRouter = router({
           await db
             .select({ id: users.id })
             .from(users)
-            .where(eq(users.id, input.userId))
+            .where(and(eq(users.id, input.userId), orgScope(users, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!user)
@@ -2007,7 +2134,7 @@ export const erpRouter = router({
           await db
             .select({ id: staffProfiles.id })
             .from(staffProfiles)
-            .where(eq(staffProfiles.userId, input.userId))
+            .where(and(eq(staffProfiles.userId, input.userId), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (existing && existing.id !== input.staffProfileId)
@@ -2019,9 +2146,9 @@ export const erpRouter = router({
         await db
           .update(staffProfiles)
           .set({ userId: input.userId, updatedAt: new Date() })
-          .where(eq(staffProfiles.id, input.staffProfileId));
+          .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "STAFF_ACCESS_LINKED",
           "staffProfile",
           input.staffProfileId,
@@ -2029,24 +2156,24 @@ export const erpRouter = router({
         );
         return { success: true };
       }),
-    unlinkAccess: protectedProcedure
+    unlinkAccess: tenantProcedure
       .input(z.object({ staffProfileId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         await db
           .update(staffProfiles)
           .set({ userId: null, updatedAt: new Date() })
-          .where(eq(staffProfiles.id, input.staffProfileId));
+          .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "STAFF_ACCESS_UNLINKED",
           "staffProfile",
           input.staffProfileId
         );
         return { success: true };
       }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(
         z.object({
           name: z.string().min(2),
@@ -2057,32 +2184,33 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         const result = await (
           await dbOrThrow()
         )
           .insert(staffProfiles)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             phone: input.phone || null,
             baseSalary: three(input.baseSalary),
             commissionRate: three(input.commissionRate),
           })
           .returning({ id: staffProfiles.id });
         const staffId = id(result);
-        await audit(ctx.user.id, "STAFF_CREATED", "staffProfile", staffId);
+        await audit(ctx.user.id, ctx.organizationId, "STAFF_CREATED", "staffProfile", staffId);
         return { id: staffId };
       }),
-    remove: protectedProcedure
+    remove: tenantProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         const db = await dbOrThrow();
         const profile = (
           await db
             .select({ id: staffProfiles.id, name: staffProfiles.name })
             .from(staffProfiles)
-            .where(eq(staffProfiles.id, input.id))
+            .where(and(eq(staffProfiles.id, input.id), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!profile)
@@ -2093,13 +2221,13 @@ export const erpRouter = router({
         await db
           .update(staffProfiles)
           .set({ isActive: false, updatedAt: new Date() })
-          .where(eq(staffProfiles.id, input.id));
-        await audit(ctx.user.id, "STAFF_ARCHIVED", "staffProfile", input.id, {
+          .where(and(eq(staffProfiles.id, input.id), orgScope(staffProfiles, ctx.organizationId)));
+        await audit(ctx.user.id, ctx.organizationId, "STAFF_ARCHIVED", "staffProfile", input.id, {
           name: profile.name,
         });
         return { success: true, id: input.id, name: profile.name };
       }),
-    recordAttendance: protectedProcedure
+    recordAttendance: tenantProcedure
       .input(
         z.object({
           staffProfileId: z.number().int(),
@@ -2114,13 +2242,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         const db = await dbOrThrow();
         const profile = (
           await db
             .select()
             .from(staffProfiles)
-            .where(eq(staffProfiles.id, input.staffProfileId))
+            .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!profile)
@@ -2137,6 +2265,7 @@ export const erpRouter = router({
         await db
           .insert(attendance)
           .values({
+            organizationId: ctx.organizationId,
             staffProfileId: input.staffProfileId,
             workDate: new Date(input.workDate),
             status: input.status,
@@ -2155,7 +2284,7 @@ export const erpRouter = router({
             recordedBy: ctx.user.id,
           });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "ATTENDANCE_RECORDED",
           "attendance",
           input.staffProfileId,
@@ -2163,23 +2292,25 @@ export const erpRouter = router({
         );
         return { success: true, absenceDeduction };
       }),
-    attendanceHistory: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, payrollRoles);
+    attendanceHistory: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, payrollRoles);
       return (await dbOrThrow())
         .select()
         .from(attendance)
+        .where(orgScope(attendance, ctx.organizationId))
         .orderBy(desc(attendance.workDate))
         .limit(100);
     }),
-    performance: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, payrollRoles);
+    performance: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, payrollRoles);
       return (await dbOrThrow())
         .select()
         .from(performanceRecords)
+        .where(orgScope(performanceRecords, ctx.organizationId))
         .orderBy(desc(performanceRecords.workDate))
         .limit(100);
     }),
-    addPerformance: protectedProcedure
+    addPerformance: tenantProcedure
       .input(
         z.object({
           staffProfileId: z.number().int(),
@@ -2191,11 +2322,12 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         await (await dbOrThrow())
           .insert(performanceRecords)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             workDate: new Date(input.workDate),
             units: three(input.units),
             commissionEarned: three(input.commissionEarned),
@@ -2203,25 +2335,26 @@ export const erpRouter = router({
             recordedBy: ctx.user.id,
           });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "PERFORMANCE_RECORDED",
           "performanceRecord",
           input.staffProfileId
         );
         return { success: true };
       }),
-    payouts: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, payrollRoles);
+    payouts: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, payrollRoles);
       return (await dbOrThrow())
         .select()
         .from(salaryPayouts)
+        .where(orgScope(salaryPayouts, ctx.organizationId))
         .orderBy(desc(salaryPayouts.paidAt))
         .limit(100);
     }),
-    removePayout: protectedProcedure
+    removePayout: tenantProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         const db = await dbOrThrow();
         const payout = (
           await db
@@ -2230,7 +2363,7 @@ export const erpRouter = router({
               payslipNumber: salaryPayouts.payslipNumber,
             })
             .from(salaryPayouts)
-            .where(eq(salaryPayouts.id, input.id))
+            .where(and(eq(salaryPayouts.id, input.id), orgScope(salaryPayouts, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!payout)
@@ -2238,9 +2371,11 @@ export const erpRouter = router({
             code: "NOT_FOUND",
             message: "Payslip record not found.",
           });
-        await db.delete(salaryPayouts).where(eq(salaryPayouts.id, input.id));
+        await db
+          .delete(salaryPayouts)
+          .where(and(eq(salaryPayouts.id, input.id), orgScope(salaryPayouts, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "SALARY_PAYOUT_DELETED",
           "salaryPayout",
           input.id,
@@ -2248,7 +2383,7 @@ export const erpRouter = router({
         );
         return { success: true, payslipNumber: payout.payslipNumber };
       }),
-    calculate: protectedProcedure
+    calculate: tenantProcedure
       .input(
         z.object({
           staffProfileId: z.number().int().positive(),
@@ -2261,13 +2396,13 @@ export const erpRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         const db = await dbOrThrow();
         const staff = (
           await db
             .select()
             .from(staffProfiles)
-            .where(eq(staffProfiles.id, input.staffProfileId))
+            .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!staff)
@@ -2281,6 +2416,7 @@ export const erpRouter = router({
           .from(performanceRecords)
           .where(
             and(
+              orgScope(performanceRecords, ctx.organizationId),
               eq(performanceRecords.staffProfileId, staff.id),
               gte(performanceRecords.workDate, start),
               lte(performanceRecords.workDate, end)
@@ -2291,6 +2427,7 @@ export const erpRouter = router({
           .from(attendance)
           .where(
             and(
+              orgScope(attendance, ctx.organizationId),
               eq(attendance.staffProfileId, staff.id),
               gte(attendance.workDate, start),
               lte(attendance.workDate, end)
@@ -2331,7 +2468,7 @@ export const erpRouter = router({
           netSalary,
         };
       }),
-    createPayout: protectedProcedure
+    createPayout: tenantProcedure
       .input(
         z.object({
           staffProfileId: z.number().int().positive(),
@@ -2348,13 +2485,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, payrollRoles);
+        await access(ctx.user.id, ctx.organizationId, payrollRoles);
         const db = await dbOrThrow();
         const staff = (
           await db
             .select()
             .from(staffProfiles)
-            .where(eq(staffProfiles.id, input.staffProfileId))
+            .where(and(eq(staffProfiles.id, input.staffProfileId), orgScope(staffProfiles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!staff)
@@ -2368,6 +2505,7 @@ export const erpRouter = router({
           .from(performanceRecords)
           .where(
             and(
+              orgScope(performanceRecords, ctx.organizationId),
               eq(performanceRecords.staffProfileId, staff.id),
               gte(performanceRecords.workDate, start),
               lte(performanceRecords.workDate, end)
@@ -2378,6 +2516,7 @@ export const erpRouter = router({
           .from(attendance)
           .where(
             and(
+              orgScope(attendance, ctx.organizationId),
               eq(attendance.staffProfileId, staff.id),
               gte(attendance.workDate, start),
               lte(attendance.workDate, end)
@@ -2416,6 +2555,7 @@ export const erpRouter = router({
         const result = await db
           .insert(salaryPayouts)
           .values({
+            organizationId: ctx.organizationId,
             staffProfileId: staff.id,
             payPeriod: input.payPeriod,
             payslipNumber,
@@ -2432,7 +2572,7 @@ export const erpRouter = router({
           .returning({ id: salaryPayouts.id });
         const payoutId = id(result);
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "SALARY_PAYOUT_CREATED",
           "salaryPayout",
           payoutId,
@@ -2455,10 +2595,10 @@ export const erpRouter = router({
       }),
   }),
   tailoring: router({
-    list: protectedProcedure
+    list: tenantProcedure
       .input(tailoringListInput.optional())
       .query(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, tailoringRoles);
+        await access(ctx.user.id, ctx.organizationId, tailoringRoles);
         const db = await dbOrThrow();
         const [
           orders,
@@ -2471,11 +2611,12 @@ export const erpRouter = router({
           db
             .select()
             .from(tailoringOrders)
+            .where(orgScope(tailoringOrders, ctx.organizationId))
             .orderBy(desc(tailoringOrders.createdAt))
             .limit(100),
-          db.select().from(customers),
-          db.select().from(staffProfiles),
-          db.select().from(measurementProfiles),
+          db.select().from(customers).where(orgScope(customers, ctx.organizationId)),
+          db.select().from(staffProfiles).where(orgScope(staffProfiles, ctx.organizationId)),
+          db.select().from(measurementProfiles).where(orgScope(measurementProfiles, ctx.organizationId)),
           db
             .select({
               id: sales.id,
@@ -2486,6 +2627,7 @@ export const erpRouter = router({
               paymentMethod: sales.paymentMethod,
             })
             .from(sales)
+            .where(orgScope(sales, ctx.organizationId))
             .orderBy(desc(sales.createdAt))
             .limit(500),
           db
@@ -2495,6 +2637,7 @@ export const erpRouter = router({
               status: invoices.status,
             })
             .from(invoices)
+            .where(orgScope(invoices, ctx.organizationId))
             .limit(500),
         ]);
         const clients = new Map(clientRows.map(client => [client.id, client]));
@@ -2539,16 +2682,16 @@ export const erpRouter = router({
             ].some(value => String(value).toLowerCase().includes(search))
         );
       }),
-    create: protectedProcedure
+    create: tenantProcedure
       .input(tailoringOrderInput)
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, tailoringRoles);
+        await access(ctx.user.id, ctx.organizationId, tailoringRoles);
         const db = await dbOrThrow();
         const customer = (
           await db
             .select()
             .from(customers)
-            .where(eq(customers.id, input.customerId))
+            .where(and(eq(customers.id, input.customerId), orgScope(customers, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!customer)
@@ -2561,7 +2704,12 @@ export const erpRouter = router({
               await db
                 .select()
                 .from(measurementProfiles)
-                .where(eq(measurementProfiles.id, input.measurementProfileId))
+                .where(
+                  and(
+                    eq(measurementProfiles.id, input.measurementProfileId),
+                    orgScope(measurementProfiles, ctx.organizationId)
+                  )
+                )
                 .limit(1)
             )[0]
           : null;
@@ -2570,7 +2718,7 @@ export const erpRouter = router({
               await db
                 .select()
                 .from(staffProfiles)
-                .where(eq(staffProfiles.id, input.assignedTailorId))
+                .where(and(eq(staffProfiles.id, input.assignedTailorId), orgScope(staffProfiles, ctx.organizationId)))
                 .limit(1)
             )[0]
           : null;
@@ -2595,6 +2743,7 @@ export const erpRouter = router({
           .insert(tailoringOrders)
           .values({
             ...input,
+            organizationId: ctx.organizationId,
             orderNumber,
             measurementProfileId: input.measurementProfileId || null,
             assignedTailorId: input.assignedTailorId || null,
@@ -2610,7 +2759,7 @@ export const erpRouter = router({
           .returning({ id: tailoringOrders.id });
         const orderId = id(result);
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "TAILORING_ORDER_CREATED",
           "tailoringOrder",
           orderId,
@@ -2623,7 +2772,7 @@ export const erpRouter = router({
         );
         return { id: orderId, orderNumber };
       }),
-    update: protectedProcedure
+    update: tenantProcedure
       .input(
         z.object({
           id: z.number().int().positive(),
@@ -2634,13 +2783,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, tailoringRoles);
+        await access(ctx.user.id, ctx.organizationId, tailoringRoles);
         const db = await dbOrThrow();
         const current = (
           await db
             .select()
             .from(tailoringOrders)
-            .where(eq(tailoringOrders.id, input.id))
+            .where(and(eq(tailoringOrders.id, input.id), orgScope(tailoringOrders, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!current)
@@ -2653,7 +2802,7 @@ export const erpRouter = router({
             await db
               .select()
               .from(staffProfiles)
-              .where(eq(staffProfiles.id, input.assignedTailorId))
+              .where(and(eq(staffProfiles.id, input.assignedTailorId), orgScope(staffProfiles, ctx.organizationId)))
               .limit(1)
           )[0];
           if (!tailor?.isActive)
@@ -2670,9 +2819,9 @@ export const erpRouter = router({
             dueDate: input.dueDate ? new Date(input.dueDate) : null,
             productionNotes: input.productionNotes || null,
           })
-          .where(eq(tailoringOrders.id, input.id));
+          .where(and(eq(tailoringOrders.id, input.id), orgScope(tailoringOrders, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "TAILORING_ORDER_UPDATED",
           "tailoringOrder",
           input.id,
@@ -2682,8 +2831,8 @@ export const erpRouter = router({
       }),
   }),
   team: router({
-    listRoles: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, adminRoles);
+    listRoles: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, adminRoles);
       const db = await dbOrThrow();
       const baseRoles = await db
         .select({
@@ -2694,9 +2843,16 @@ export const erpRouter = router({
           email: users.email,
         })
         .from(userBusinessRoles)
-        .leftJoin(users, eq(userBusinessRoles.userId, users.id));
-      const assignments = await db.select().from(userCustomRoles);
-      const definitions = await db.select().from(customRoles);
+        .leftJoin(users, eq(userBusinessRoles.userId, users.id))
+        .where(orgScope(userBusinessRoles, ctx.organizationId));
+      const assignments = await db
+        .select()
+        .from(userCustomRoles)
+        .where(orgScope(userCustomRoles, ctx.organizationId));
+      const definitions = await db
+        .select()
+        .from(customRoles)
+        .where(orgScope(customRoles, ctx.organizationId));
       const byUser = new Map(
         assignments.map(assignment => [assignment.userId, assignment])
       );
@@ -2716,10 +2872,10 @@ export const erpRouter = router({
         };
       });
     }),
-    removeUser: protectedProcedure
+    removeUser: tenantProcedure
       .input(z.object({ userId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         if (input.userId === ctx.user.id)
           throw new TRPCError({
             code: "FORBIDDEN",
@@ -2730,7 +2886,7 @@ export const erpRouter = router({
           await db
             .select({ id: users.id, role: users.role })
             .from(users)
-            .where(eq(users.id, input.userId))
+            .where(and(eq(users.id, input.userId), orgScope(users, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!target)
@@ -2742,7 +2898,12 @@ export const erpRouter = router({
           await db
             .select()
             .from(userBusinessRoles)
-            .where(eq(userBusinessRoles.userId, input.userId))
+            .where(
+              and(
+                eq(userBusinessRoles.userId, input.userId),
+                orgScope(userBusinessRoles, ctx.organizationId)
+              )
+            )
             .limit(1)
         )[0];
         if (target.role === "admin" || targetBusinessRole?.role === "admin")
@@ -2753,33 +2914,61 @@ export const erpRouter = router({
         await db.transaction(async tx => {
           await tx
             .delete(userCustomRoles)
-            .where(eq(userCustomRoles.userId, input.userId));
+            .where(
+              and(
+                eq(userCustomRoles.userId, input.userId),
+                orgScope(userCustomRoles, ctx.organizationId)
+              )
+            );
           await tx
             .delete(userBusinessRoles)
-            .where(eq(userBusinessRoles.userId, input.userId));
+            .where(
+              and(
+                eq(userBusinessRoles.userId, input.userId),
+                orgScope(userBusinessRoles, ctx.organizationId)
+              )
+            );
           await tx
             .delete(pendingAccessRequests)
-            .where(eq(pendingAccessRequests.userId, input.userId));
+            .where(
+              and(
+                eq(pendingAccessRequests.userId, input.userId),
+                orgScope(pendingAccessRequests, ctx.organizationId)
+              )
+            );
           await tx
             .delete(staffAccessInvites)
-            .where(eq(staffAccessInvites.acceptedByUserId, input.userId));
+            .where(
+              and(
+                eq(staffAccessInvites.acceptedByUserId, input.userId),
+                orgScope(staffAccessInvites, ctx.organizationId)
+              )
+            );
           await tx
             .update(staffProfiles)
             .set({ userId: null, isActive: false, updatedAt: new Date() })
-            .where(eq(staffProfiles.userId, input.userId));
-          await tx.delete(users).where(eq(users.id, input.userId));
+            .where(
+              and(
+                eq(staffProfiles.userId, input.userId),
+                orgScope(staffProfiles, ctx.organizationId)
+              )
+            );
+          await tx
+            .delete(users)
+            .where(and(eq(users.id, input.userId), orgScope(users, ctx.organizationId)));
         });
-        await audit(ctx.user.id, "USER_REMOVED", "user", input.userId, {
+        await audit(ctx.user.id, ctx.organizationId, "USER_REMOVED", "user", input.userId, {
           access: "revoked",
           records: "preserved",
         });
         return { success: true };
       }),
-    listCustomRoles: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, adminRoles);
+    listCustomRoles: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, adminRoles);
       const rows = await (await dbOrThrow())
         .select()
         .from(customRoles)
+        .where(orgScope(customRoles, ctx.organizationId))
         .orderBy(customRoles.name);
       return rows.map(role => ({
         ...role,
@@ -2790,7 +2979,7 @@ export const erpRouter = router({
           : [],
       }));
     }),
-    createCustomRole: protectedProcedure
+    createCustomRole: tenantProcedure
       .input(
         z.object({
           name: z.string().min(2).max(80),
@@ -2799,12 +2988,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const result = await (
           await dbOrThrow()
         )
           .insert(customRoles)
           .values({
+            organizationId: ctx.organizationId,
             name: input.name.trim(),
             description: input.description.trim() || null,
             permissionsJson: input.permissions,
@@ -2813,7 +3003,7 @@ export const erpRouter = router({
           .returning({ id: customRoles.id });
         const roleId = id(result);
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "CUSTOM_ROLE_CREATED",
           "customRole",
           roleId,
@@ -2821,7 +3011,7 @@ export const erpRouter = router({
         );
         return { id: roleId };
       }),
-    updateCustomRole: protectedProcedure
+    updateCustomRole: tenantProcedure
       .input(
         z.object({
           id: z.number().int().positive(),
@@ -2832,7 +3022,7 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         await (
           await dbOrThrow()
         )
@@ -2843,9 +3033,9 @@ export const erpRouter = router({
             permissionsJson: input.permissions,
             isActive: input.isActive,
           })
-          .where(eq(customRoles.id, input.id));
+          .where(and(eq(customRoles.id, input.id), orgScope(customRoles, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "CUSTOM_ROLE_UPDATED",
           "customRole",
           input.id,
@@ -2853,7 +3043,7 @@ export const erpRouter = router({
         );
         return { success: true };
       }),
-    assignCustomRole: protectedProcedure
+    assignCustomRole: tenantProcedure
       .input(
         z.object({
           userId: z.number().int().positive(),
@@ -2862,23 +3052,39 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
-        const role = (
-          await db
+        const [role, targetUser] = await Promise.all([
+          db
             .select()
             .from(customRoles)
-            .where(eq(customRoles.id, input.customRoleId))
+            .where(and(eq(customRoles.id, input.customRoleId), orgScope(customRoles, ctx.organizationId)))
             .limit(1)
-        )[0];
+            .then(rows => rows[0]),
+          db
+            .select({ id: users.id })
+            .from(users)
+            .where(and(eq(users.id, input.userId), orgScope(users, ctx.organizationId)))
+            .limit(1)
+            .then(rows => rows[0]),
+        ]);
         if (!role?.isActive)
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "Choose an active owner-managed role.",
           });
+        // userCustomRoles.userId is globally unique (not per-org), so without
+        // this check an admin could pass another organization's userId and
+        // have onConflictDoUpdate silently hijack that user's role via the
+        // unique-constraint conflict path.
+        if (!targetUser)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "User not found in your organization.",
+          });
         await db
           .insert(userCustomRoles)
-          .values({ ...input, updatedBy: ctx.user.id })
+          .values({ ...input, organizationId: ctx.organizationId, updatedBy: ctx.user.id })
           .onConflictDoUpdate({
             target: userCustomRoles.userId,
             set: {
@@ -2888,7 +3094,7 @@ export const erpRouter = router({
             },
           });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "CUSTOM_ROLE_ASSIGNED",
           "user",
           input.userId,
@@ -2896,17 +3102,22 @@ export const erpRouter = router({
         );
         return { success: true };
       }),
-    clearCustomRole: protectedProcedure
+    clearCustomRole: tenantProcedure
       .input(z.object({ userId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         await (await dbOrThrow())
           .delete(userCustomRoles)
-          .where(eq(userCustomRoles.userId, input.userId));
-        await audit(ctx.user.id, "CUSTOM_ROLE_CLEARED", "user", input.userId);
+          .where(
+            and(
+              eq(userCustomRoles.userId, input.userId),
+              orgScope(userCustomRoles, ctx.organizationId)
+            )
+          );
+        await audit(ctx.user.id, ctx.organizationId, "CUSTOM_ROLE_CLEARED", "user", input.userId);
         return { success: true };
       }),
-    assignRole: protectedProcedure
+    assignRole: tenantProcedure
       .input(
         z.object({
           userId: z.number().int(),
@@ -2915,17 +3126,33 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
+        // userBusinessRoles.userId is globally unique (not per-org): verify
+        // the target belongs to this organization first, or an admin could
+        // pass another organization's userId and hijack that user's role via
+        // the onConflictDoUpdate unique-constraint conflict path.
+        const targetUser = (
+          await db
+            .select({ id: users.id })
+            .from(users)
+            .where(and(eq(users.id, input.userId), orgScope(users, ctx.organizationId)))
+            .limit(1)
+        )[0];
+        if (!targetUser)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "User not found in your organization.",
+          });
         await db
           .insert(userBusinessRoles)
-          .values(input)
+          .values({ ...input, organizationId: ctx.organizationId })
           .onConflictDoUpdate({
             target: userBusinessRoles.userId,
             set: { role: input.role, isActive: input.isActive },
           });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "BUSINESS_ROLE_ASSIGNED",
           "user",
           input.userId,
@@ -2935,23 +3162,25 @@ export const erpRouter = router({
       }),
   }),
   access: router({
-    listInvites: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, adminRoles);
+    listInvites: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, adminRoles);
       const db = await dbOrThrow();
       const [invites, roles] = await Promise.all([
         db
           .select()
           .from(staffAccessInvites)
+          .where(orgScope(staffAccessInvites, ctx.organizationId))
           .orderBy(desc(staffAccessInvites.invitedAt)),
-        db.select().from(customRoles),
+        db.select().from(customRoles).where(orgScope(customRoles, ctx.organizationId)),
       ]);
       const roleById = new Map(roles.map(role => [role.id, role]));
       return invites.map(invite => ({
         ...invite,
+        tokenHash: undefined,
         roleName: roleById.get(invite.customRoleId)?.name || "Archived role",
       }));
     }),
-    inviteStaff: protectedProcedure
+    inviteStaff: tenantProcedure
       .input(
         z.object({
           name: z.string().trim().min(2).max(160),
@@ -2960,13 +3189,13 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const role = (
           await db
             .select()
             .from(customRoles)
-            .where(eq(customRoles.id, input.customRoleId))
+            .where(and(eq(customRoles.id, input.customRoleId), orgScope(customRoles, ctx.organizationId)))
             .limit(1)
         )[0];
         if (!role?.isActive)
@@ -2975,19 +3204,27 @@ export const erpRouter = router({
             message: "Choose an active role before preparing staff access.",
           });
         const email = input.email.toLowerCase();
+        const token = randomToken("invite");
+        const tokenHash = hashOpaqueToken(token);
+        const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
         await db
           .insert(staffAccessInvites)
           .values({
+            organizationId: ctx.organizationId,
             name: input.name,
             email,
+            tokenHash,
+            expiresAt,
             customRoleId: role.id,
             invitedBy: ctx.user.id,
             isActive: true,
           })
           .onConflictDoUpdate({
-            target: staffAccessInvites.email,
+            target: [staffAccessInvites.organizationId, staffAccessInvites.email],
             set: {
               name: input.name,
+              tokenHash,
+              expiresAt,
               customRoleId: role.id,
               invitedBy: ctx.user.id,
               invitedAt: new Date(),
@@ -2996,42 +3233,51 @@ export const erpRouter = router({
               acceptedAt: null,
             },
           });
+        const inviteUrl = `${(ENV.authBaseUrl || "").replace(/\/$/, "")}/?invite_token=${encodeURIComponent(token)}`;
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "STAFF_ACCESS_PREPARED",
           "staffAccessInvite",
           undefined,
           { email, roleId: role.id }
         );
-        return { email, roleName: role.name };
+        return { email, roleName: role.name, inviteUrl };
       }),
-    cancelInvite: protectedProcedure
+    cancelInvite: tenantProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         await db
           .update(staffAccessInvites)
           .set({ isActive: false })
-          .where(eq(staffAccessInvites.id, input.id));
+          .where(and(eq(staffAccessInvites.id, input.id), orgScope(staffAccessInvites, ctx.organizationId)));
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "STAFF_ACCESS_CANCELLED",
           "staffAccessInvite",
           input.id
         );
         return { success: true };
       }),
-    listPending: protectedProcedure.query(async ({ ctx }) => {
-      await access(ctx.user.id, ctx.user.role, adminRoles);
+    listPending: tenantProcedure.query(async ({ ctx }) => {
+      await access(ctx.user.id, ctx.organizationId, adminRoles);
       const db = await dbOrThrow();
       const [requests, people] = await Promise.all([
         db
           .select()
           .from(pendingAccessRequests)
-          .where(eq(pendingAccessRequests.status, "pending"))
+          .where(
+            and(
+              orgScope(pendingAccessRequests, ctx.organizationId),
+              eq(pendingAccessRequests.status, "pending")
+            )
+          )
           .orderBy(desc(pendingAccessRequests.requestedAt)),
-        db.select().from(users),
+        db
+          .select()
+          .from(users)
+          .where(orgScope(users, ctx.organizationId)),
       ]);
       const byId = new Map(people.map(person => [person.id, person]));
       return requests.map(request => ({
@@ -3040,7 +3286,7 @@ export const erpRouter = router({
         email: byId.get(request.userId)?.email || null,
       }));
     }),
-    approvePending: protectedProcedure
+    approvePending: tenantProcedure
       .input(
         z.object({
           requestId: z.number().int().positive(),
@@ -3049,19 +3295,29 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const [request, role] = await Promise.all([
           db
             .select()
             .from(pendingAccessRequests)
-            .where(eq(pendingAccessRequests.id, input.requestId))
+            .where(
+              and(
+                eq(pendingAccessRequests.id, input.requestId),
+                orgScope(pendingAccessRequests, ctx.organizationId)
+              )
+            )
             .limit(1)
             .then(rows => rows[0]),
           db
             .select()
             .from(customRoles)
-            .where(eq(customRoles.id, input.customRoleId))
+            .where(
+              and(
+                eq(customRoles.id, input.customRoleId),
+                orgScope(customRoles, ctx.organizationId)
+              )
+            )
             .limit(1)
             .then(rows => rows[0]),
         ]);
@@ -3078,7 +3334,12 @@ export const erpRouter = router({
         await db.transaction(async tx => {
           await tx
             .insert(userBusinessRoles)
-            .values({ userId: request.userId, role: "sales", isActive: true })
+            .values({
+              userId: request.userId,
+              organizationId: ctx.organizationId,
+              role: "sales",
+              isActive: true,
+            })
             .onConflictDoUpdate({
               target: userBusinessRoles.userId,
               set: { isActive: true },
@@ -3087,6 +3348,7 @@ export const erpRouter = router({
             .insert(userCustomRoles)
             .values({
               userId: request.userId,
+              organizationId: ctx.organizationId,
               customRoleId: role.id,
               isActive: true,
               updatedBy: ctx.user.id,
@@ -3107,10 +3369,15 @@ export const erpRouter = router({
               reviewedBy: ctx.user.id,
               note: input.note || null,
             })
-            .where(eq(pendingAccessRequests.id, request.id));
+            .where(
+              and(
+                eq(pendingAccessRequests.id, request.id),
+                orgScope(pendingAccessRequests, ctx.organizationId)
+              )
+            );
         });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "ACCESS_REQUEST_APPROVED",
           "pendingAccessRequest",
           request.id,
@@ -3118,7 +3385,7 @@ export const erpRouter = router({
         );
         return { success: true };
       }),
-    rejectPending: protectedProcedure
+    rejectPending: tenantProcedure
       .input(
         z.object({
           requestId: z.number().int().positive(),
@@ -3126,13 +3393,18 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const request = (
           await db
             .select()
             .from(pendingAccessRequests)
-            .where(eq(pendingAccessRequests.id, input.requestId))
+            .where(
+              and(
+                eq(pendingAccessRequests.id, input.requestId),
+                orgScope(pendingAccessRequests, ctx.organizationId)
+              )
+            )
             .limit(1)
         )[0];
         if (!request || request.status !== "pending")
@@ -3148,9 +3420,14 @@ export const erpRouter = router({
             reviewedBy: ctx.user.id,
             note: input.note || null,
           })
-          .where(eq(pendingAccessRequests.id, request.id));
+          .where(
+            and(
+              eq(pendingAccessRequests.id, request.id),
+              orgScope(pendingAccessRequests, ctx.organizationId)
+            )
+          );
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "ACCESS_REQUEST_REJECTED",
           "pendingAccessRequest",
           request.id,
@@ -3160,7 +3437,7 @@ export const erpRouter = router({
       }),
   }),
   accessApproval: router({
-    approveWithPermissions: protectedProcedure
+    approveWithPermissions: tenantProcedure
       .input(
         z.object({
           requestId: z.number().int().positive(),
@@ -3182,13 +3459,18 @@ export const erpRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await access(ctx.user.id, ctx.user.role, adminRoles);
+        await access(ctx.user.id, ctx.organizationId, adminRoles);
         const db = await dbOrThrow();
         const request = (
           await db
             .select()
             .from(pendingAccessRequests)
-            .where(eq(pendingAccessRequests.id, input.requestId))
+            .where(
+              and(
+                eq(pendingAccessRequests.id, input.requestId),
+                orgScope(pendingAccessRequests, ctx.organizationId)
+              )
+            )
             .limit(1)
         )[0];
         if (!request || request.status !== "pending")
@@ -3200,6 +3482,7 @@ export const erpRouter = router({
           const roleResult = await tx
             .insert(customRoles)
             .values({
+              organizationId: ctx.organizationId,
               name: input.name,
               description: input.description || null,
               permissionsJson: input.permissions,
@@ -3210,7 +3493,12 @@ export const erpRouter = router({
           const roleId = id(roleResult);
           await tx
             .insert(userBusinessRoles)
-            .values({ userId: request.userId, role: "sales", isActive: true })
+            .values({
+              userId: request.userId,
+              organizationId: ctx.organizationId,
+              role: "sales",
+              isActive: true,
+            })
             .onConflictDoUpdate({
               target: userBusinessRoles.userId,
               set: { isActive: true },
@@ -3219,6 +3507,7 @@ export const erpRouter = router({
             .insert(userCustomRoles)
             .values({
               userId: request.userId,
+              organizationId: ctx.organizationId,
               customRoleId: roleId,
               isActive: true,
               updatedBy: ctx.user.id,
@@ -3239,11 +3528,16 @@ export const erpRouter = router({
               reviewedBy: ctx.user.id,
               note: input.note || null,
             })
-            .where(eq(pendingAccessRequests.id, request.id));
+            .where(
+              and(
+                eq(pendingAccessRequests.id, request.id),
+                orgScope(pendingAccessRequests, ctx.organizationId)
+              )
+            );
           return roleId;
         });
         await audit(
-          ctx.user.id,
+          ctx.user.id, ctx.organizationId,
           "ACCESS_REQUEST_APPROVED_WITH_PERMISSIONS",
           "pendingAccessRequest",
           request.id,
@@ -3252,11 +3546,12 @@ export const erpRouter = router({
         return { roleId: transaction };
       }),
   }),
-  audit: protectedProcedure.query(async ({ ctx }) => {
-    await access(ctx.user.id, ctx.user.role, adminRoles);
+  audit: tenantProcedure.query(async ({ ctx }) => {
+    await access(ctx.user.id, ctx.organizationId, adminRoles);
     return (await dbOrThrow())
       .select()
       .from(auditLogs)
+      .where(orgScope(auditLogs, ctx.organizationId))
       .orderBy(desc(auditLogs.createdAt))
       .limit(200);
   }),
