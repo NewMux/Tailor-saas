@@ -1,7 +1,9 @@
 import { createServer } from "http";
 import net from "net";
+import { initSentry } from "./sentry";
 import { createApp } from "./app";
 import { serveStatic, setupVite } from "./vite";
+import { logger } from "./logger";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -23,6 +25,7 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  initSentry();
   const app = createApp();
   const server = createServer(app);
 
@@ -37,12 +40,15 @@ async function startServer() {
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    logger.warn({ preferredPort, port }, "Preferred port busy, using fallback port");
   }
 
   server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+    logger.info({ port }, "Server listening");
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(err => {
+  logger.fatal({ err }, "Server failed to start");
+  process.exit(1);
+});

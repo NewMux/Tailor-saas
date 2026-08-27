@@ -5,6 +5,8 @@ import { and, eq, gt, isNull, lt } from "drizzle-orm";
 import { authSessions, passwordResetTokens, users, type User } from "../../drizzle/schema";
 import { ensurePendingAccess, getDb, getUserByEmail, getUserById } from "../db";
 import { ENV } from "./env";
+import { logger } from "./logger";
+import { captureError } from "./sentry";
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -209,7 +211,7 @@ async function forgotPassword(req: Request, res: Response) {
   if (user) {
     const token = await createResetToken(user.id);
     resetUrlValue = resetUrl(req, token);
-    console.info(`[Auth] Password reset link for ${email}: ${resetUrlValue}`);
+    logger.info({ email, resetUrl: resetUrlValue }, "Password reset link generated");
   }
   res.json({
     message: "If an account exists for this email, a reset link has been generated for the server administrator.",
@@ -251,7 +253,8 @@ function sendError(res: Response, error: unknown) {
     res.status(error.status).json({ error: { code: error.code, message: error.message } });
     return;
   }
-  console.error("[Auth] Unexpected error", error);
+  logger.error({ err: error }, "Unexpected auth error");
+  captureError(error);
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Authentication service unavailable." } });
 }
 

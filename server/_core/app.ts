@@ -1,11 +1,14 @@
 import "dotenv/config";
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import pinoHttp from "pino-http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { registerStorageProxy } from "./storageProxy";
 import { registerAuthRoutes } from "./localAuth";
 import { ENV } from "./env";
+import { logger } from "./logger";
+import { captureError } from "./sentry";
 
 function registerCors(app: Express) {
   const allowedOrigins = ENV.allowedOrigin
@@ -38,6 +41,7 @@ function registerCors(app: Express) {
 export function createApp(): Express {
   const app = express();
   app.disable("x-powered-by");
+  app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === "/api/auth/session" } }));
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -59,7 +63,22 @@ export function createApp(): Express {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      onError({ error, path }) {
+        if (error.code === "INTERNAL_SERVER_ERROR") {
+          logger.error({ err: error, path }, "tRPC internal error");
+          captureError(error);
+        }
+      },
     }),
   );
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    logger.error({ err }, "Unhandled request error");
+    captureError(err);
+    res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Something went wrong." } });
+  });
   return app;
 }

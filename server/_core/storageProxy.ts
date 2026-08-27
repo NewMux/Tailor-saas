@@ -4,6 +4,8 @@ import { customRoles, staffDocuments, userBusinessRoles, userCustomRoles } from 
 import { getDb } from "../db";
 import { sdk } from "./sdk";
 import { ENV } from "./env";
+import { logger } from "./logger";
+import { captureError } from "./sentry";
 
 async function canReadStaffDocuments(userId: number) {
   const db = await getDb();
@@ -54,7 +56,7 @@ export function registerStorageProxy(app: Express) {
       const forgeResp = await fetch(forgeUrl, { headers: { Authorization: `Bearer ${ENV.forgeApiKey}` } });
       if (!forgeResp.ok) {
         const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
+        logger.error({ status: forgeResp.status, body }, "Storage proxy backend error");
         res.status(502).send("Storage backend error");
         return;
       }
@@ -73,7 +75,8 @@ export function registerStorageProxy(app: Express) {
         res.status(401).send("Authentication required");
         return;
       }
-      console.error("[StorageProxy] failed:", err);
+      logger.error({ err }, "Storage proxy failed");
+      captureError(err);
       res.status(502).send("Storage proxy error");
     }
   });
