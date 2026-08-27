@@ -53,8 +53,13 @@ export const authApi = {
     const response = await request<{ authenticated: boolean; user: AuthUser | null }>("/api/auth/session", { method: "GET" });
     return response.authenticated;
   },
-  async register(name: string, email: string, password: string) {
-    return remember(await request<AuthResponse>("/api/auth/register", { method: "POST", body: JSON.stringify({ name, email, password }) }));
+  async register(
+    input: { name: string; email: string; password: string } & (
+      | { mode: "create_org"; orgName: string }
+      | { mode: "join_invite"; inviteToken: string }
+    )
+  ) {
+    return remember(await request<AuthResponse>("/api/auth/register", { method: "POST", body: JSON.stringify(input) }));
   },
   async login(email: string, password: string) {
     return remember(await request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }));

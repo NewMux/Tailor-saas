@@ -1,5 +1,5 @@
 import { authApi } from "@/lib/auth";
-import { getPasswordResetToken } from "@/lib/authCallback";
+import { getInviteToken, getPasswordResetToken } from "@/lib/authCallback";
 import { trpc } from "@/lib/trpc";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -30,6 +30,7 @@ export function useAuth() {
   const [callbackError, setCallbackError] = useState<string | null>(null);
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(null);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [cachedUser, setCachedUser] = useState<CachedUser | null>(() => readCachedUser());
 
   const meQuery = trpc.auth.me.useQuery(undefined, {
@@ -55,11 +56,13 @@ export function useAuth() {
   useEffect(() => {
     let active = true;
     const token = getPasswordResetToken(window.location.search);
+    const invite = getInviteToken(window.location.search);
     if (token) {
       setResetToken(token);
       setRecoveryMode(true);
       setHasSession(false);
     } else {
+      if (invite) setInviteToken(invite);
       void refreshSession();
     }
 
@@ -93,6 +96,11 @@ export function useAuth() {
     }
   }, [utils]);
 
+  const clearInviteToken = useCallback(() => {
+    setInviteToken(null);
+    window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.hash}`);
+  }, []);
+
   const completeRecovery = useCallback(async () => {
     setRecoveryMode(false);
     setResetToken(null);
@@ -121,6 +129,8 @@ export function useAuth() {
     callbackError,
     recoveryMode,
     resetToken,
+    inviteToken,
+    clearInviteToken,
     completeRecovery,
   };
 }

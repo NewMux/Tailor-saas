@@ -11,13 +11,16 @@ type AuthGateProps = {
   recoveryMode?: boolean;
   resetToken?: string | null;
   onRecoveryComplete?: () => Promise<void> | void;
+  inviteToken?: string | null;
+  onInviteAccepted?: () => void;
 };
 
-export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete }: AuthGateProps) {
-  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
+export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted }: AuthGateProps) {
+  const [mode, setMode] = useState<"login" | "register" | "forgot">(inviteToken ? "register" : "login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [orgName, setOrgName] = useState("");
   const [recoveryPassword, setRecoveryPassword] = useState("");
   const [recoveryConfirmation, setRecoveryConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +53,15 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         setMode("login");
       } else if (mode === "login") {
         await authApi.login(email, password);
+      } else if (inviteToken) {
+        await authApi.register({ name, email, password, mode: "join_invite", inviteToken });
+        onInviteAccepted?.();
       } else {
-        await authApi.register(name, email, password);
+        if (orgName.trim().length < 2) {
+          setError("Enter your shop or business name.");
+          return;
+        }
+        await authApi.register({ name, email, password, mode: "create_org", orgName: orgName.trim() });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -66,7 +76,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         <Button data-no-translate type="button" variant="outline" size="sm" className="absolute right-5 top-5 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
         <Scissors className="mx-auto h-8 w-8 text-primary" />
         <h1 className="mt-5 text-center text-2xl font-semibold">
-          {recoveryMode ? "Set a new password" : mode === "login" ? "Sign in to Al-Mamlaka ERP" : mode === "forgot" ? "Reset your password" : "Create your account"}
+          {recoveryMode ? "Set a new password" : mode === "login" ? "Sign in to Al-Mamlaka ERP" : mode === "forgot" ? "Reset your password" : inviteToken ? "Join your team" : "Create your shop"}
         </h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {recoveryMode
@@ -75,7 +85,9 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
               ? "Use the email and password set up for your staff account."
               : mode === "forgot"
                 ? "Enter your staff email and request a secure reset link."
-                : "The first account registered with the shop owner's email becomes the administrator."}
+                : inviteToken
+                  ? "You're accepting a staff invite. Create your account to join this shop's workspace."
+                  : "Set up a new, independent ERP workspace for your shop. You'll be its administrator."}
         </p>
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
@@ -121,6 +133,20 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
                     minLength={2}
                     maxLength={160}
                     autoComplete="name"
+                  />
+                </div>
+              )}
+              {mode === "register" && !inviteToken && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="orgName">Shop or business name</Label>
+                  <Input
+                    id="orgName"
+                    value={orgName}
+                    onChange={e => setOrgName(e.target.value)}
+                    required
+                    minLength={2}
+                    maxLength={160}
+                    autoComplete="organization"
                   />
                 </div>
               )}
