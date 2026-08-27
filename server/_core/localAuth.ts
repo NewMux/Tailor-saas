@@ -14,7 +14,7 @@ import {
   users,
   type User,
 } from "../../drizzle/schema";
-import { ensurePendingAccess, getDb, getUserByEmail, getUserById } from "../db";
+import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getUserByEmail, getUserById } from "../db";
 import { ENV } from "./env";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
@@ -192,6 +192,7 @@ async function register(req: Request, res: Response) {
     typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
   const password =
     typeof req.body?.password === "string" ? req.body.password : "";
+  const mode = req.body?.mode === "join_invite" ? "join_invite" : "create_org";
   if (name.length < 2 || name.length > 160)
     throw new AuthError("Enter a valid full name.");
   if (!email || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email))
@@ -210,26 +211,51 @@ async function register(req: Request, res: Response) {
     );
 
   const passwordHash = await hashPassword(password);
-  const role = ENV.ownerEmail && email === ENV.ownerEmail ? "admin" : "user";
-  const inserted = await db
-    .insert(users)
-    .values({
-      openId: `local_${randomUUID()}`,
-      name,
-      email,
-      passwordHash,
-      loginMethod: "local",
-      role,
-    })
-    .returning();
-  const user = inserted[0];
-  if (!user)
+  const newUser = {
+    openId: `local_${randomUUID()}`,
+    name,
+    email,
+    passwordHash,
+    loginMethod: "local",
+  };
+
+  let user: User;
+  try {
+    if (mode === "join_invite") {
+      const inviteToken =
+        typeof req.body?.inviteToken === "string"
+          ? req.body.inviteToken.trim()
+          : "";
+      if (!inviteToken)
+        throw new AuthError("An invite link is required to join a shop.");
+      const invite = await getActiveInviteByTokenHash(
+        hashOpaqueToken(inviteToken)
+      );
+      if (!invite)
+        throw new AuthError(
+          "This invite link is invalid or has expired.",
+          400,
+          "INVITE_INVALID"
+        );
+      const result = await acceptInviteAndCreateUser(invite.id, newUser);
+      user = result.user;
+    } else {
+      const orgName =
+        typeof req.body?.orgName === "string" ? req.body.orgName.trim() : "";
+      if (orgName.length < 2 || orgName.length > 160)
+        throw new AuthError("Enter your shop or business name.");
+      const result = await createOrganizationWithOwner(orgName, newUser);
+      user = result.user;
+    }
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
     throw new AuthError(
-      "Unable to create the account",
-      500,
+      error instanceof Error ? error.message : "Unable to create the account",
+      400,
       "ACCOUNT_CREATE_FAILED"
     );
-  await ensurePendingAccess(user.id, user.role);
+  }
+
   const token = await createSession(user.id);
   setSessionCookie(res, token);
   res.status(201).json({ user: publicUser(user), token });
@@ -259,7 +285,6 @@ async function login(req: Request, res: Response) {
       "INVALID_CREDENTIALS"
     );
   }
-  await ensurePendingAccess(user.id, user.role);
   const token = await createSession(user.id);
   setSessionCookie(res, token);
   res.json({ user: publicUser(user), token });
@@ -328,7 +353,6 @@ async function resetPassword(req: Request, res: Response) {
   await db.delete(authSessions).where(eq(authSessions.userId, reset.userId));
   const user = await getUserById(reset.userId);
   if (!user) throw new AuthError("Account not found", 404, "ACCOUNT_NOT_FOUND");
-  await ensurePendingAccess(user.id, user.role);
   const sessionToken = await createSession(user.id);
   setSessionCookie(res, sessionToken);
   res.json({

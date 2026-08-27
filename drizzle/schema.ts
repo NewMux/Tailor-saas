@@ -7,7 +7,9 @@ export const organizations = pgTable("organizations", {
   id: serial("id").primaryKey(),
   slug: varchar("slug", { length: 80 }).notNull().unique(),
   name: varchar("name", { length: 160 }).notNull(),
-  ownerId: integer("ownerId").notNull().references(() => users.id),
+  // No FK to users: the owning user row is created in the same transaction
+  // as this one and the two reference each other (see users.organizationId).
+  ownerId: integer("ownerId").notNull(),
   status: organizationStatusEnum("status").notNull().default("active"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
@@ -16,7 +18,7 @@ export type Organization = typeof organizations.$inferSelect;
 export type InsertOrganization = typeof organizations.$inferInsert;
 
 export const users = pgTable("users", {
-  id: serial("id").primaryKey(), openId: varchar("openId", { length: 320 }).notNull().unique(), name: text("name"), email: varchar("email", { length: 320 }), passwordHash: text("passwordHash"), loginMethod: varchar("loginMethod", { length: 64 }), role: userRoleEnum("role").default("user").notNull(), organizationId: integer("organizationId").notNull().references(() => organizations.id), createdAt: timestamp("createdAt").defaultNow().notNull(), updatedAt: timestamp("updatedAt").defaultNow().notNull(), lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+  id: serial("id").primaryKey(), openId: varchar("openId", { length: 320 }).notNull().unique(), name: text("name"), email: varchar("email", { length: 320 }), passwordHash: text("passwordHash"), loginMethod: varchar("loginMethod", { length: 64 }), role: userRoleEnum("role").default("user").notNull(), organizationId: integer("organizationId").references(() => organizations.id), createdAt: timestamp("createdAt").defaultNow().notNull(), updatedAt: timestamp("updatedAt").defaultNow().notNull(), lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

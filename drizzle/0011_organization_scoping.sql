@@ -2,7 +2,11 @@
 -- (0010), and replaces global-unique business keys with per-organization
 -- composite uniques so two shops can each use the same order/sale/invoice
 -- numbering without colliding.
-ALTER TABLE "users" ALTER COLUMN "organizationId" SET NOT NULL;--> statement-breakpoint
+-- users.organizationId intentionally stays nullable: registration inserts
+-- the user row before the organization it will own exists yet (the two rows
+-- reference each other), and it's set within the same transaction before
+-- commit. tenantProcedure (server/_core/trpc.ts) fails closed for any
+-- session where it's still null.
 ALTER TABLE "userBusinessRoles" ALTER COLUMN "organizationId" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "customRoles" ALTER COLUMN "organizationId" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "userCustomRoles" ALTER COLUMN "organizationId" SET NOT NULL;--> statement-breakpoint
