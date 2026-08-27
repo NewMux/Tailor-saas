@@ -1,6 +1,11 @@
 import type { Express } from "express";
 import { eq } from "drizzle-orm";
-import { customRoles, staffDocuments, userBusinessRoles, userCustomRoles } from "../../drizzle/schema";
+import {
+  customRoles,
+  staffDocuments,
+  userBusinessRoles,
+  userCustomRoles,
+} from "../../drizzle/schema";
 import { getDb } from "../db";
 import { sdk } from "./sdk";
 import { ENV } from "./env";
@@ -10,13 +15,45 @@ import { captureError } from "./sentry";
 async function canReadStaffDocuments(userId: number) {
   const db = await getDb();
   if (!db) return false;
-  const businessRole = (await db.select({ role: userBusinessRoles.role, isActive: userBusinessRoles.isActive }).from(userBusinessRoles).where(eq(userBusinessRoles.userId, userId)).limit(1))[0];
+  const businessRole = (
+    await db
+      .select({
+        role: userBusinessRoles.role,
+        isActive: userBusinessRoles.isActive,
+      })
+      .from(userBusinessRoles)
+      .where(eq(userBusinessRoles.userId, userId))
+      .limit(1)
+  )[0];
   if (!businessRole?.isActive) return false;
-  if (businessRole.role === "admin" || businessRole.role === "payroll") return true;
-  const assignment = (await db.select({ customRoleId: userCustomRoles.customRoleId, isActive: userCustomRoles.isActive }).from(userCustomRoles).where(eq(userCustomRoles.userId, userId)).limit(1))[0];
+  if (businessRole.role === "admin" || businessRole.role === "payroll")
+    return true;
+  const assignment = (
+    await db
+      .select({
+        customRoleId: userCustomRoles.customRoleId,
+        isActive: userCustomRoles.isActive,
+      })
+      .from(userCustomRoles)
+      .where(eq(userCustomRoles.userId, userId))
+      .limit(1)
+  )[0];
   if (!assignment?.isActive) return false;
-  const customRole = (await db.select({ permissionsJson: customRoles.permissionsJson, isActive: customRoles.isActive }).from(customRoles).where(eq(customRoles.id, assignment.customRoleId)).limit(1))[0];
-  const permissions = Array.isArray(customRole?.permissionsJson) ? customRole.permissionsJson.filter((value): value is string => typeof value === "string") : [];
+  const customRole = (
+    await db
+      .select({
+        permissionsJson: customRoles.permissionsJson,
+        isActive: customRoles.isActive,
+      })
+      .from(customRoles)
+      .where(eq(customRoles.id, assignment.customRoleId))
+      .limit(1)
+  )[0];
+  const permissions = Array.isArray(customRole?.permissionsJson)
+    ? customRole.permissionsJson.filter(
+        (value): value is string => typeof value === "string"
+      )
+    : [];
   return Boolean(customRole?.isActive && permissions.includes("payroll"));
 }
 
@@ -45,18 +82,32 @@ export function registerStorageProxy(app: Express) {
         res.status(503).send("Database unavailable");
         return;
       }
-      const document = (await db.select({ id: staffDocuments.id }).from(staffDocuments).where(eq(staffDocuments.storageKey, key)).limit(1))[0];
+      const document = (
+        await db
+          .select({ id: staffDocuments.id })
+          .from(staffDocuments)
+          .where(eq(staffDocuments.storageKey, key))
+          .limit(1)
+      )[0];
       if (!document) {
         res.status(404).send("Document not found");
         return;
       }
 
-      const forgeUrl = new URL("v1/storage/presign/get", ENV.forgeApiUrl.replace(/\/+$/, "") + "/");
+      const forgeUrl = new URL(
+        "v1/storage/presign/get",
+        ENV.forgeApiUrl.replace(/\/+$/, "") + "/"
+      );
       forgeUrl.searchParams.set("path", key);
-      const forgeResp = await fetch(forgeUrl, { headers: { Authorization: `Bearer ${ENV.forgeApiKey}` } });
+      const forgeResp = await fetch(forgeUrl, {
+        headers: { Authorization: `Bearer ${ENV.forgeApiKey}` },
+      });
       if (!forgeResp.ok) {
         const body = await forgeResp.text().catch(() => "");
-        logger.error({ status: forgeResp.status, body }, "Storage proxy backend error");
+        logger.error(
+          { status: forgeResp.status, body },
+          "Storage proxy backend error"
+        );
         res.status(502).send("Storage backend error");
         return;
       }
@@ -67,11 +118,20 @@ export function registerStorageProxy(app: Express) {
         return;
       }
 
-      res.set({ "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" });
+      res.set({
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+      });
       res.redirect(307, url);
     } catch (err) {
       const message = err instanceof Error ? err.message : "unknown error";
-      if (message === "Missing session" || message === "Invalid session" || message === "Session verification unavailable" || message === "Server authentication is not configured") {
+      if (
+        message === "Missing session" ||
+        message === "Invalid session" ||
+        message === "Session verification unavailable" ||
+        message === "Server authentication is not configured"
+      ) {
         res.status(401).send("Authentication required");
         return;
       }

@@ -1,8 +1,19 @@
-import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+} from "node:crypto";
 import { promisify } from "node:util";
 import type { Express, Request, Response } from "express";
 import { and, eq, gt, isNull, lt } from "drizzle-orm";
-import { authSessions, passwordResetTokens, users, type User } from "../../drizzle/schema";
+import {
+  authSessions,
+  passwordResetTokens,
+  users,
+  type User,
+} from "../../drizzle/schema";
 import { ensurePendingAccess, getDb, getUserByEmail, getUserById } from "../db";
 import { ENV } from "./env";
 import { logger } from "./logger";
@@ -17,7 +28,7 @@ export class AuthError extends Error {
   constructor(
     message: string,
     public readonly status = 400,
-    public readonly code = "BAD_REQUEST",
+    public readonly code = "BAD_REQUEST"
   ) {
     super(message);
     this.name = "AuthError";
@@ -81,14 +92,14 @@ function setSessionCookie(res: Response, token: string) {
   const secure = ENV.secureCookies ? "; Secure" : "";
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`,
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
   );
 }
 
 function clearSessionCookie(res: Response) {
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${ENV.secureCookies ? "None" : "Lax"}; Max-Age=0${ENV.secureCookies ? "; Secure" : ""}`,
+    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${ENV.secureCookies ? "None" : "Lax"}; Max-Age=0${ENV.secureCookies ? "; Secure" : ""}`
   );
 }
 
@@ -98,9 +109,14 @@ function publicUser(user: User) {
 
 async function createSession(userId: number) {
   const db = await getDb();
-  if (!db) throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
+  if (!db)
+    throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
   const now = new Date();
-  await db.delete(authSessions).where(and(eq(authSessions.userId, userId), lt(authSessions.expiresAt, now)));
+  await db
+    .delete(authSessions)
+    .where(
+      and(eq(authSessions.userId, userId), lt(authSessions.expiresAt, now))
+    );
   const token = randomToken("local");
   await db.insert(authSessions).values({
     tokenHash: hashOpaqueToken(token),
@@ -115,10 +131,14 @@ async function revokeSession(token: string | undefined) {
   if (!token) return;
   const db = await getDb();
   if (!db) return;
-  await db.delete(authSessions).where(eq(authSessions.tokenHash, hashOpaqueToken(token)));
+  await db
+    .delete(authSessions)
+    .where(eq(authSessions.tokenHash, hashOpaqueToken(token)));
 }
 
-export async function getUserForRequest(req: Request): Promise<User | undefined> {
+export async function getUserForRequest(
+  req: Request
+): Promise<User | undefined> {
   const token = tokenFromRequest(req);
   if (!token) return undefined;
   const db = await getDb();
@@ -128,20 +148,31 @@ export async function getUserForRequest(req: Request): Promise<User | undefined>
     await db
       .select()
       .from(authSessions)
-      .where(and(eq(authSessions.tokenHash, hashOpaqueToken(token)), gt(authSessions.expiresAt, now)))
+      .where(
+        and(
+          eq(authSessions.tokenHash, hashOpaqueToken(token)),
+          gt(authSessions.expiresAt, now)
+        )
+      )
       .limit(1)
   )[0];
   if (!session) return undefined;
-  await db.update(authSessions).set({ lastUsedAt: now }).where(eq(authSessions.id, session.id));
+  await db
+    .update(authSessions)
+    .set({ lastUsedAt: now })
+    .where(eq(authSessions.id, session.id));
   return getUserById(session.userId);
 }
 
 async function createResetToken(userId: number) {
   const db = await getDb();
-  if (!db) throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
+  if (!db)
+    throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
   const rawToken = randomToken("reset");
   const now = new Date();
-  await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
+  await db
+    .delete(passwordResetTokens)
+    .where(eq(passwordResetTokens.userId, userId));
   await db.insert(passwordResetTokens).values({
     tokenHash: hashOpaqueToken(rawToken),
     userId,
@@ -157,15 +188,26 @@ function resetUrl(req: Request, token: string) {
 
 async function register(req: Request, res: Response) {
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-  const email = typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (name.length < 2 || name.length > 160) throw new AuthError("Enter a valid full name.");
-  if (!email || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email)) throw new AuthError("Enter a valid email address.");
-  if (password.length < 8 || password.length > 200) throw new AuthError("Password must be between 8 and 200 characters.");
+  const email =
+    typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
+  const password =
+    typeof req.body?.password === "string" ? req.body.password : "";
+  if (name.length < 2 || name.length > 160)
+    throw new AuthError("Enter a valid full name.");
+  if (!email || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email))
+    throw new AuthError("Enter a valid email address.");
+  if (password.length < 8 || password.length > 200)
+    throw new AuthError("Password must be between 8 and 200 characters.");
 
   const db = await getDb();
-  if (!db) throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
-  if (await getUserByEmail(email)) throw new AuthError("An account already exists for this email. Use the password reset option.", 409, "ACCOUNT_EXISTS");
+  if (!db)
+    throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
+  if (await getUserByEmail(email))
+    throw new AuthError(
+      "An account already exists for this email. Use the password reset option.",
+      409,
+      "ACCOUNT_EXISTS"
+    );
 
   const passwordHash = await hashPassword(password);
   const role = ENV.ownerEmail && email === ENV.ownerEmail ? "admin" : "user";
@@ -181,7 +223,12 @@ async function register(req: Request, res: Response) {
     })
     .returning();
   const user = inserted[0];
-  if (!user) throw new AuthError("Unable to create the account", 500, "ACCOUNT_CREATE_FAILED");
+  if (!user)
+    throw new AuthError(
+      "Unable to create the account",
+      500,
+      "ACCOUNT_CREATE_FAILED"
+    );
   await ensurePendingAccess(user.id, user.role);
   const token = await createSession(user.id);
   setSessionCookie(res, token);
@@ -189,14 +236,28 @@ async function register(req: Request, res: Response) {
 }
 
 async function login(req: Request, res: Response) {
-  const email = typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const email =
+    typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
+  const password =
+    typeof req.body?.password === "string" ? req.body.password : "";
   const user = email ? await getUserByEmail(email) : undefined;
-  if (!user || !user.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
+  if (
+    !user ||
+    !user.passwordHash ||
+    !(await verifyPassword(password, user.passwordHash))
+  ) {
     if (user && !user.passwordHash) {
-      throw new AuthError("This account needs a password reset before it can sign in.", 401, "PASSWORD_RESET_REQUIRED");
+      throw new AuthError(
+        "This account needs a password reset before it can sign in.",
+        401,
+        "PASSWORD_RESET_REQUIRED"
+      );
     }
-    throw new AuthError("Invalid email or password.", 401, "INVALID_CREDENTIALS");
+    throw new AuthError(
+      "Invalid email or password.",
+      401,
+      "INVALID_CREDENTIALS"
+    );
   }
   await ensurePendingAccess(user.id, user.role);
   const token = await createSession(user.id);
@@ -205,57 +266,94 @@ async function login(req: Request, res: Response) {
 }
 
 async function forgotPassword(req: Request, res: Response) {
-  const email = typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
+  const email =
+    typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
   const user = email ? await getUserByEmail(email) : undefined;
   let resetUrlValue: string | undefined;
   if (user) {
     const token = await createResetToken(user.id);
     resetUrlValue = resetUrl(req, token);
-    logger.info({ email, resetUrl: resetUrlValue }, "Password reset link generated");
+    logger.info(
+      { email, resetUrl: resetUrlValue },
+      "Password reset link generated"
+    );
   }
   res.json({
-    message: "If an account exists for this email, a reset link has been generated for the server administrator.",
+    message:
+      "If an account exists for this email, a reset link has been generated for the server administrator.",
     ...(ENV.isProduction ? {} : { resetUrl: resetUrlValue }),
   });
 }
 
 async function resetPassword(req: Request, res: Response) {
   const token = typeof req.body?.token === "string" ? req.body.token : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (!token || password.length < 8 || password.length > 200) throw new AuthError("The reset token or new password is invalid.");
+  const password =
+    typeof req.body?.password === "string" ? req.body.password : "";
+  if (!token || password.length < 8 || password.length > 200)
+    throw new AuthError("The reset token or new password is invalid.");
 
   const db = await getDb();
-  if (!db) throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
+  if (!db)
+    throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
   const now = new Date();
   const reset = (
     await db
       .select()
       .from(passwordResetTokens)
-      .where(and(eq(passwordResetTokens.tokenHash, hashOpaqueToken(token)), isNull(passwordResetTokens.usedAt), gt(passwordResetTokens.expiresAt, now)))
+      .where(
+        and(
+          eq(passwordResetTokens.tokenHash, hashOpaqueToken(token)),
+          isNull(passwordResetTokens.usedAt),
+          gt(passwordResetTokens.expiresAt, now)
+        )
+      )
       .limit(1)
   )[0];
-  if (!reset) throw new AuthError("This password reset link is invalid or expired.", 400, "RESET_TOKEN_INVALID");
+  if (!reset)
+    throw new AuthError(
+      "This password reset link is invalid or expired.",
+      400,
+      "RESET_TOKEN_INVALID"
+    );
 
   const passwordHash = await hashPassword(password);
-  await db.update(users).set({ passwordHash, loginMethod: "local", updatedAt: now }).where(eq(users.id, reset.userId));
-  await db.update(passwordResetTokens).set({ usedAt: now }).where(eq(passwordResetTokens.id, reset.id));
+  await db
+    .update(users)
+    .set({ passwordHash, loginMethod: "local", updatedAt: now })
+    .where(eq(users.id, reset.userId));
+  await db
+    .update(passwordResetTokens)
+    .set({ usedAt: now })
+    .where(eq(passwordResetTokens.id, reset.id));
   await db.delete(authSessions).where(eq(authSessions.userId, reset.userId));
   const user = await getUserById(reset.userId);
   if (!user) throw new AuthError("Account not found", 404, "ACCOUNT_NOT_FOUND");
   await ensurePendingAccess(user.id, user.role);
   const sessionToken = await createSession(user.id);
   setSessionCookie(res, sessionToken);
-  res.json({ user: publicUser({ ...user, passwordHash }), token: sessionToken });
+  res.json({
+    user: publicUser({ ...user, passwordHash }),
+    token: sessionToken,
+  });
 }
 
 function sendError(res: Response, error: unknown) {
   if (error instanceof AuthError) {
-    res.status(error.status).json({ error: { code: error.code, message: error.message } });
+    res
+      .status(error.status)
+      .json({ error: { code: error.code, message: error.message } });
     return;
   }
   logger.error({ err: error }, "Unexpected auth error");
   captureError(error);
-  res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Authentication service unavailable." } });
+  res
+    .status(500)
+    .json({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Authentication service unavailable.",
+      },
+    });
 }
 
 export function registerAuthRoutes(app: Express) {
@@ -294,7 +392,10 @@ export function registerAuthRoutes(app: Express) {
   app.get("/api/auth/session", async (req, res) => {
     try {
       const user = await getUserForRequest(req);
-      res.json({ authenticated: Boolean(user), user: user ? publicUser(user) : null });
+      res.json({
+        authenticated: Boolean(user),
+        user: user ? publicUser(user) : null,
+      });
     } catch (error) {
       sendError(res, error);
     }

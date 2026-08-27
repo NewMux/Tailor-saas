@@ -17,13 +17,21 @@ export async function getDb() {
 export async function getUserById(userId: number) {
   const db = await getDb();
   if (!db) return undefined;
-  return (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
+  return (
+    await db.select().from(users).where(eq(users.id, userId)).limit(1)
+  )[0];
 }
 
 export async function getUserByEmail(email: string) {
   const db = await getDb();
   if (!db) return undefined;
-  return (await db.select().from(users).where(sql`lower(${users.email}) = ${email}`).limit(1))[0];
+  return (
+    await db
+      .select()
+      .from(users)
+      .where(sql`lower(${users.email}) = ${email}`)
+      .limit(1)
+  )[0];
 }
 
 /**
@@ -31,7 +39,10 @@ export async function getUserByEmail(email: string) {
  * existing ERP access gate then keeps them out of business procedures until an
  * owner assigns a role, matching the original onboarding behavior.
  */
-export async function ensurePendingAccess(userId: number, role: "user" | "admin") {
+export async function ensurePendingAccess(
+  userId: number,
+  role: "user" | "admin"
+) {
   if (role === "admin") return;
   const db = await getDb();
   if (!db) return;
@@ -45,7 +56,9 @@ export async function ensurePendingAccess(userId: number, role: "user" | "admin"
   )[0];
 
   if (!existing) {
-    await db.insert(pendingAccessRequests).values({ userId, status: "pending" });
+    await db
+      .insert(pendingAccessRequests)
+      .values({ userId, status: "pending" });
   } else if (existing.status === "rejected") {
     await db
       .update(pendingAccessRequests)
@@ -56,6 +69,11 @@ export async function ensurePendingAccess(userId: number, role: "user" | "admin"
         reviewedBy: null,
         note: null,
       })
-      .where(and(eq(pendingAccessRequests.id, existing.id), eq(pendingAccessRequests.userId, userId)));
+      .where(
+        and(
+          eq(pendingAccessRequests.id, existing.id),
+          eq(pendingAccessRequests.userId, userId)
+        )
+      );
   }
 }
