@@ -18,3 +18,7 @@ To run the standalone server locally, create a `.env` from `.env.example`, set `
 Read [HETZNER_DEPLOYMENT.md](./HETZNER_DEPLOYMENT.md) before cutover. It describes the PostgreSQL backup and restore sequence, Coolify Docker Compose deployment, Coolify HTTPS domain and health checks, existing-user password reset links, acceptance testing, and recurring backups.
 
 The main operator guide is [ERP-HANDOVER-MANUAL.md](./ERP-HANDOVER-MANUAL.md). Do not commit `.env` files, database dumps, reset-link files, or production credentials.
+
+## Internal sales demo
+
+This repo also runs as the sales team's internal demo instance (not public, no landing page). See [DEMO.md](./DEMO.md) for the one-time setup and how the demo data auto-resets.
