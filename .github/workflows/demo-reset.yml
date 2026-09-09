@@ -1,0 +1,34 @@
+name: Demo data reset
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC. Adjust to your timezone/preference.
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEMO_ENABLED == 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reset demo data
+        run: pnpm demo:reset
+        env:
+          DATABASE_URL: ${{ secrets.DEMO_DATABASE_URL }}
+          DEMO_OWNER_EMAIL: ${{ secrets.DEMO_OWNER_EMAIL }}
+          DEMO_ORG_SLUG: ${{ vars.DEMO_ORG_SLUG }}

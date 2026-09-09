@@ -48,22 +48,22 @@ the wrong environment.
 
 ## Scheduling automatic resets
 
-**Coolify (preferred — this repo already deploys through Coolify's Docker
-Compose stack per `HETZNER_DEPLOYMENT.md`)**: in the `app` service's
-*Scheduled Tasks* tab, add a task that runs `pnpm demo:reset` on a cron
-schedule, with `DEMO_OWNER_EMAIL` set as the task's environment variable (or
-inherited from the service). Example — nightly at 03:00 UTC:
+A scheduled GitHub Actions workflow (`.github/workflows/demo-reset.yml`)
+handles this — it runs `pnpm demo:reset` nightly at 03:00 UTC (edit the cron
+expression in the workflow file to change the time) and can also be triggered
+on demand from the Actions tab (**Run workflow**). This works regardless of
+where the app itself is hosted, since it only needs network access to the
+database.
 
-```
-0 3 * * *
-```
+**One-time setup:**
 
-**Plain crontab (non-Coolify hosts)** — example line for the deploy user's
-crontab, resetting nightly at 03:00 server time:
+1. In the GitHub repo, **Settings → Secrets and variables → Actions**, add:
+   - Secret `DEMO_DATABASE_URL` — the demo database's connection string. On Railway, use the **public** connection string from the Postgres service's **Connect** tab (not the private/internal one — GitHub's runners aren't on Railway's private network).
+   - Secret `DEMO_OWNER_EMAIL` — the fixed demo owner email from the one-time setup above.
+   - (Optional) Variable `DEMO_ORG_SLUG` — the safety-check slug described above.
+2. Add variable `DEMO_ENABLED` = `true`. The workflow is gated on this so an unconfigured repo doesn't get nightly failure-notification emails from a cron job with no secrets set — flip it once you've done step 1.
 
-```
-0 3 * * * cd /opt/tailor-erp/app && DEMO_OWNER_EMAIL=demo@yourcompany.example DATABASE_URL=postgresql://... /usr/bin/pnpm demo:reset >> /var/log/tailor-erp/demo-reset.log 2>&1
-```
+No platform-specific scheduler needed — this approach is the same whether the app is deployed on Railway, Render, or anywhere else.
 
 ## What gets wiped vs. preserved
 

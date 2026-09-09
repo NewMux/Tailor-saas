@@ -1,6 +1,0 @@
-# Replace erp.example.com with the domain pointing to the Hetzner server.
-# The app container serves both the frontend and the API from one origin,
-# so the whole domain is proxied here - there is no separate frontend host.
-erp.example.com {
-  reverse_proxy 127.0.0.1:3000
-}
