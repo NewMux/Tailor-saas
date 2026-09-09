@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AuthGate from "@/components/AuthGate";
-import LandingPage from "@/pages/LandingPage";
 import { AlertCircle, ClipboardList, FileText, LayoutDashboard, Loader2, LogOut, MoreHorizontal, Package, ReceiptText, RefreshCw, Scissors, Settings, ShoppingCart, Users, Wifi, WifiOff } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -49,13 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (loading) return <div className="flex min-h-screen items-center justify-center"><Loader2 className="animate-spin text-primary" /></div>;
   if (recoveryMode) return <AuthGate recoveryMode resetToken={resetToken} onRecoveryComplete={completeRecovery} />;
-  if (!isAuthenticated) {
-    // An invite link can land on any path, so honor it before routing on location.
-    if (inviteToken) return <AuthGate callbackError={callbackError} inviteToken={inviteToken} onInviteAccepted={clearInviteToken} />;
-    if (location === "/") return <LandingPage />;
-    if (location === "/internal/new-organization") return <AuthGate allowSelfSignup callbackError={callbackError} />;
-    return <AuthGate callbackError={callbackError} />;
-  }
+  if (!isAuthenticated) return <AuthGate callbackError={callbackError} inviteToken={inviteToken} onInviteAccepted={clearInviteToken} />;
 
   return <div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"}`}>
     <aside className={`fixed inset-y-0 hidden w-64 bg-white p-4 lg:block ${isArabic ? "right-0 border-l" : "left-0 border-r"}`}>

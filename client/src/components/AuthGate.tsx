@@ -15,13 +15,9 @@ type AuthGateProps = {
   onRecoveryComplete?: () => Promise<void> | void;
   inviteToken?: string | null;
   onInviteAccepted?: () => void;
-  // Self-serve "create a new organization" signup is only exposed on the
-  // internal provisioning route now that onboarding happens via a sales
-  // contract, not public signup. Invite-based joining is unaffected.
-  allowSelfSignup?: boolean;
 };
 
-export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted, allowSelfSignup = false }: AuthGateProps) {
+export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted }: AuthGateProps) {
   const [mode, setMode] = useState<"login" | "register" | "forgot">(inviteToken ? "register" : "login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -211,7 +207,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
           >
             Forgot password?
           </button>}
-          {(allowSelfSignup || inviteToken) && <button
+          <button
             type="button"
             className="block w-full underline-offset-4 hover:underline"
             onClick={() => {
@@ -221,7 +217,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
             }}
           >
             {mode === "register" ? "Already have an account? Sign in" : "Need an account? Register"}
-          </button>}
+          </button>
         </div>}
       </div>
     </main>
