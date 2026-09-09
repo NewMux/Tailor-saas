@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { downloadBrandedMonthlySalesCsv } from "@/lib/salesReportCsv";
+import { clientBrand } from "@/lib/branding";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +34,7 @@ export default function SalesHistory() {
   const resetFilters = () => { setSearch(""); setSource(""); setPaymentStatus(""); setStartDate(""); setEndDate(""); };
   const exportCsv = () => {
     if (!report.data) return;
-    downloadBrandedMonthlySalesCsv({ shopName: report.data.shop?.shopName || "Al-Mamlaka Tailor ERP", arabicShopName: report.data.shop?.arabicShopName, month: report.data.month, revenue: report.data.totals.revenue, saleCount: report.data.totals.saleCount, sales: report.data.sales });
+    downloadBrandedMonthlySalesCsv({ shopName: report.data.shop?.shopName || `${clientBrand.name} Tailor ERP`, arabicShopName: report.data.shop?.arabicShopName, month: report.data.month, revenue: report.data.totals.revenue, saleCount: report.data.totals.saleCount, sales: report.data.sales });
     toast.success("Branded monthly CSV downloaded");
   };
 

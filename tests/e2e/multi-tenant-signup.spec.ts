@@ -21,7 +21,7 @@ async function registerNewOrg(page: import("@playwright/test").Page, org: typeof
 
 async function loginExisting(page: import("@playwright/test").Page, org: typeof orgOne) {
   await page.goto("/login");
-  await expect(page.getByText("Sign in to Al-Mamlaka ERP")).toBeVisible();
+  await expect(page.getByText("Sign in to Tafsell")).toBeVisible();
   await page.locator("#email").fill(org.email);
   await page.locator("#password").fill(org.password);
   await page.locator('button[type=submit]').click();

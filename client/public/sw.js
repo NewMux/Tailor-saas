@@ -1,11 +1,11 @@
-const SHELL_CACHE = "tailor-erp-mobile-shell-v4";
+const SHELL_CACHE = "tailor-erp-mobile-shell-v5";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/manifest.json",
   "/favicon.svg",
-  "/brand/al-hussam-logo-192.jpg",
-  "/brand/al-hussam-logo-512.jpg",
+  "/brand/tafsell-logo-192.jpg",
+  "/brand/tafsell-logo-512.jpg",
 ];
 
 self.addEventListener("install", event => {

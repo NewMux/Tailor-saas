@@ -1,8 +1,8 @@
 export const clientBrand = {
-  name: "Al Hussam",
-  logoSrc: "/brand/al-hussam-logo-512.jpg",
-  logoAlt: "Al Hussam logo",
-  // TODO: replace with the real sales contact channel before launch.
-  salesEmail: "sales@example.com",
+  name: "Tafsell",
+  logoSrc: "/brand/tafsell-logo-512.jpg",
+  logoAlt: "Tafsell logo",
+  // TODO: replace with the real sales contact channel and logo before launch.
+  salesEmail: "sales@tafsell.com",
   salesPhone: "",
 } as const;

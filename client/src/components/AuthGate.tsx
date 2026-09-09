@@ -1,5 +1,6 @@
 import { authApi } from "@/lib/auth";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { clientBrand } from "@/lib/branding";
 import { Loader2, Scissors } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -86,7 +87,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         <Button data-no-translate type="button" variant="outline" size="sm" className="absolute right-5 top-5 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
         <Scissors className="mx-auto h-8 w-8 text-primary" />
         <h1 className="mt-5 text-center text-2xl font-semibold">
-          {recoveryMode ? "Set a new password" : mode === "login" ? "Sign in to Al-Mamlaka ERP" : mode === "forgot" ? "Reset your password" : inviteToken ? "Join your team" : "Create your shop"}
+          {recoveryMode ? "Set a new password" : mode === "login" ? `Sign in to ${clientBrand.name}` : mode === "forgot" ? "Reset your password" : inviteToken ? "Join your team" : "Create your shop"}
         </h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {recoveryMode

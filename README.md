@@ -1,4 +1,4 @@
-# Al-Mamlaka Tailor ERP
+# Tafsell Tailor ERP
 
 This repository contains the React/Vite frontend and Express/tRPC backend for a multi-tenant tailor-shop ERP. PostgreSQL, the backend, local email/password authentication, and the built frontend all run from a single Express process on the Hetzner server — there is no separate frontend host.
 
