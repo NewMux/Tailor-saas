@@ -5,7 +5,9 @@ const orgOne = { name: "Owner One", orgName: `Shop One ${stamp}`, email: `owner1
 const orgTwo = { name: "Owner Two", orgName: `Shop Two ${stamp}`, email: `owner2-${stamp}@example.com`, password: "password123" };
 
 async function registerNewOrg(page: import("@playwright/test").Page, org: typeof orgOne) {
-  await page.goto("/");
+  // Self-serve org creation now lives on the internal provisioning route -
+  // the public landing page at "/" no longer exposes a signup form.
+  await page.goto("/internal/new-organization");
   const needAccount = page.getByText("Need an account? Register");
   if (await needAccount.count()) await needAccount.click();
   await expect(page.getByText("Create your shop")).toBeVisible();
@@ -18,7 +20,7 @@ async function registerNewOrg(page: import("@playwright/test").Page, org: typeof
 }
 
 async function loginExisting(page: import("@playwright/test").Page, org: typeof orgOne) {
-  await page.goto("/");
+  await page.goto("/login");
   await expect(page.getByText("Sign in to Al-Mamlaka ERP")).toBeVisible();
   await page.locator("#email").fill(org.email);
   await page.locator("#password").fill(org.password);

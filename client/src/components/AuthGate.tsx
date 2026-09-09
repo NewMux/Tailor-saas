@@ -2,6 +2,7 @@ import { authApi } from "@/lib/auth";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Loader2, Scissors } from "lucide-react";
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,9 +14,13 @@ type AuthGateProps = {
   onRecoveryComplete?: () => Promise<void> | void;
   inviteToken?: string | null;
   onInviteAccepted?: () => void;
+  // Self-serve "create a new organization" signup is only exposed on the
+  // internal provisioning route now that onboarding happens via a sales
+  // contract, not public signup. Invite-based joining is unaffected.
+  allowSelfSignup?: boolean;
 };
 
-export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted }: AuthGateProps) {
+export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted, allowSelfSignup = false }: AuthGateProps) {
   const [mode, setMode] = useState<"login" | "register" | "forgot">(inviteToken ? "register" : "login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -27,6 +32,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const { isArabic, toggleLanguage } = useLanguage();
+  const [, navigate] = useLocation();
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -44,6 +50,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         await authApi.reset(resetToken, recoveryPassword);
         setNotice("Password updated. Opening your ERP workspace…");
         await onRecoveryComplete?.();
+        navigate("/");
         return;
       }
 
@@ -53,15 +60,18 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         setMode("login");
       } else if (mode === "login") {
         await authApi.login(email, password);
+        navigate("/");
       } else if (inviteToken) {
         await authApi.register({ name, email, password, mode: "join_invite", inviteToken });
         onInviteAccepted?.();
+        navigate("/");
       } else {
         if (orgName.trim().length < 2) {
           setError("Enter your shop or business name.");
           return;
         }
         await authApi.register({ name, email, password, mode: "create_org", orgName: orgName.trim() });
+        navigate("/");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -200,7 +210,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
           >
             Forgot password?
           </button>}
-          <button
+          {(allowSelfSignup || inviteToken) && <button
             type="button"
             className="block w-full underline-offset-4 hover:underline"
             onClick={() => {
@@ -210,7 +220,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
             }}
           >
             {mode === "register" ? "Already have an account? Sign in" : "Need an account? Register"}
-          </button>
+          </button>}
         </div>}
       </div>
     </main>
