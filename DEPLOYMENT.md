@@ -78,6 +78,18 @@ After the first deploy, verify against the live domain:
 
 Railway's Postgres plugin takes automatic daily backups on paid plans — check **Postgres service → Backups** in your project. For a manual point-in-time dump, `scripts/backup-db.sh` still works against the Railway `DATABASE_URL` (run it from anywhere with `pg_dump` installed and network access to the database, e.g. your own machine, using the public connection string Railway shows under the Postgres service's **Connect** tab).
 
+## Alternative: split deployment (frontend on Netlify, backend on Railway)
+
+The app supports a split-origin setup too — the frontend build already reads `VITE_API_URL` to call a different origin (`client/src/lib/auth.ts`, `client/src/main.tsx`), and the backend already has a CORS allowlist for it (`ALLOWED_ORIGIN` in `server/_core/app.ts`). No code changes needed. This is two separate deployments instead of one, so only use it if you specifically want the frontend on Netlify — the single-origin Railway setup above is simpler to operate day to day.
+
+1. **Deploy the backend to Railway first**, following steps 1–2 above, but leave `AUTH_BASE_URL` pointing at the Railway domain (invite/reset links should still point at wherever staff actually log in — see step 4 below) and don't attach a custom domain to it if the public-facing site is the Netlify one. Note the Railway app's URL, e.g. `https://<your-app>.up.railway.app`.
+2. **Create the Netlify site**: [app.netlify.com](https://app.netlify.com) → **Add new site → Import an existing project** → connect this GitHub repo. Netlify auto-detects `netlify.toml` at the repo root (build command, publish directory, the pnpm flag, and a SPA fallback redirect are all already configured there). Note the site's `*.netlify.app` domain Netlify assigns immediately.
+3. **Set environment variables**:
+   - On Netlify (site **Settings → Environment variables**): `VITE_API_URL=https://<your-app>.up.railway.app` (the Railway backend from step 1). This is a *build-time* variable — trigger a new deploy after setting or changing it.
+   - On Railway (the app service's variables): `ALLOWED_ORIGIN=https://<your-site>.netlify.app` (the Netlify domain from step 2). Comma-separate multiple origins if you later add a custom domain too.
+4. **`AUTH_BASE_URL`** (on Railway) should be whichever domain staff actually use day to day — the Netlify frontend domain, since that's where password-reset and invite links need to open.
+5. Trigger deploys on both sides (Railway redeploys on push automatically; Netlify builds on push once connected). Verify: open the Netlify URL, confirm `/api/auth/session` calls succeed in the browser network tab (no CORS errors) and login works.
+
 ## Local development
 
 `docker-compose.yml` is for local development only (spins up Postgres + the app together) — it isn't used for the Railway deployment, which builds the `Dockerfile` directly.

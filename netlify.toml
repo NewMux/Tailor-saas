@@ -1,0 +1,17 @@
+[build]
+  command = "pnpm install --frozen-lockfile && pnpm run build:frontend"
+  publish = "dist/public"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Forces Netlify's own install step to use pnpm (this repo pins an exact
+  # pnpm version via "packageManager" in package.json, and applies a patch
+  # from patches/ that only pnpm knows how to apply).
+  NETLIFY_USE_PNPM = "true"
+
+# Client-side routed SPA (wouter) - any path that isn't a real static file
+# falls back to index.html so direct links/refreshes on e.g. /customers work.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

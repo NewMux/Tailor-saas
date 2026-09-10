@@ -1,6 +1,6 @@
 # Tafsell Tailor ERP
 
-This repository contains the React/Vite frontend and Express/tRPC backend for a multi-tenant tailor-shop ERP. The backend, local email/password authentication, and the built frontend all run from a single Express process — there is no separate frontend host.
+This repository contains the React/Vite frontend and Express/tRPC backend for a multi-tenant tailor-shop ERP. By default the backend, local email/password authentication, and the built frontend all run from a single Express process — no separate frontend host needed — though the frontend can also be deployed separately (e.g. Netlify) if you want that split; see DEPLOYMENT.md.
 
 ## Development
 
