@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AuthGate from "@/components/AuthGate";
-import { AlertCircle, ClipboardList, FileText, LayoutDashboard, Loader2, LogOut, MoreHorizontal, Package, ReceiptText, RefreshCw, Scissors, Settings, ShoppingCart, Users, Wifi, WifiOff } from "lucide-react";
+import BillingGate from "@/components/BillingGate";
+import LandingPage from "@/pages/LandingPage";
+import { AlertCircle, ClipboardList, CreditCard, FileText, LayoutDashboard, Loader2, LogOut, MoreHorizontal, Package, ReceiptText, RefreshCw, Scissors, Settings, ShoppingCart, Users, Wifi, WifiOff } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { clientBrand } from "@/lib/branding";
@@ -19,6 +21,7 @@ const navigation = [
   { label: "Invoices", path: "/invoices", icon: FileText },
   { label: "Staff & Payroll", path: "/team", icon: Users },
   { label: "Shop Settings", path: "/settings", icon: Settings },
+  { label: "Subscription", path: "/billing", icon: CreditCard },
   { label: "Audit Trail", path: "/audit", icon: ClipboardList },
 ];
 
@@ -48,9 +51,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (loading) return <div className="flex min-h-screen items-center justify-center"><Loader2 className="animate-spin text-primary" /></div>;
   if (recoveryMode) return <AuthGate recoveryMode resetToken={resetToken} onRecoveryComplete={completeRecovery} />;
-  if (!isAuthenticated) return <AuthGate callbackError={callbackError} inviteToken={inviteToken} onInviteAccepted={clearInviteToken} />;
+  if (!isAuthenticated) {
+    // Visitors landing on the root URL get the public marketing site; every
+    // other path (including /login, /signup and any deep link they were sent)
+    // goes straight to the sign-in form. An invite link always does too, so
+    // an invited staff member is never bounced to marketing copy.
+    if (location === "/" && !inviteToken) return <LandingPage />;
+    return (
+      <AuthGate
+        callbackError={callbackError}
+        inviteToken={inviteToken}
+        onInviteAccepted={clearInviteToken}
+        initialMode={location === "/signup" ? "register" : "login"}
+      />
+    );
+  }
 
-  return <div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"}`}>
+  return <BillingGate onSignOut={() => void logout()}><div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"}`}>
     <aside className={`fixed inset-y-0 hidden w-64 bg-white p-4 lg:block ${isArabic ? "right-0 border-l" : "left-0 border-r"}`}>
       <div className="flex items-center gap-3 px-3 py-4">
         <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-white shadow-sm">
@@ -121,5 +138,5 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="flex items-center justify-between rounded-2xl bg-muted px-4 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{user?.name || t("Signed-in user")}</p><p className="truncate text-xs text-muted-foreground">{user?.email || t("ERP workspace")}</p></div><div className="flex gap-2"><Button data-no-translate variant="ghost" size="sm" className="h-10 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button><Button variant="ghost" size="sm" className="h-10 rounded-xl" onClick={() => logout()}><LogOut className="mr-2 h-4 w-4" />{t("Sign out")}</Button></div></div>
       </SheetContent>
     </Sheet>
-  </div>;
+  </div></BillingGate>;
 }

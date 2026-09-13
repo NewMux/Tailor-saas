@@ -1,5 +1,6 @@
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
+import { billingRouter } from "./billing";
 import { erpRouter } from "./erp";
 import { posRouter } from "./pos";
 
@@ -10,5 +11,5 @@ const authRouter = router({
   me: publicProcedure.query(opts => opts.ctx.user),
 });
 
-export const appRouter = router({ system: systemRouter, auth: authRouter, erp: erpRouter, pos: posRouter });
+export const appRouter = router({ system: systemRouter, auth: authRouter, billing: billingRouter, erp: erpRouter, pos: posRouter });
 export type AppRouter = typeof appRouter;

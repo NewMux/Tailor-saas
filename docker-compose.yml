@@ -1,6 +1,11 @@
-# For local development only (spins up Postgres + the app together).
-# The Railway deployment (see DEPLOYMENT.md) builds the Dockerfile directly
-# and does not use this file.
+# The application stack: Postgres plus the Express/tRPC app, which serves both
+# the API and the built frontend from a single origin.
+#
+# Used for local development AND as the Coolify "Docker Compose" build pack in
+# production (see DEPLOYMENT.md). Deliberately declares no custom network and
+# no host port binding: Coolify creates the network and routes the configured
+# domain through its own proxy, and a custom network makes that routing
+# intermittent.
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,6 +38,17 @@ services:
       BUILT_IN_FORGE_API_KEY: ${BUILT_IN_FORGE_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      # Billing. All optional: with these unset the app runs with billing
+      # disabled rather than paywalling a deployment nobody can pay for.
+      PADDLE_ENVIRONMENT: ${PADDLE_ENVIRONMENT:-sandbox}
+      PADDLE_API_KEY: ${PADDLE_API_KEY:-}
+      PADDLE_CLIENT_TOKEN: ${PADDLE_CLIENT_TOKEN:-}
+      PADDLE_PRICE_ID: ${PADDLE_PRICE_ID:-}
+      PADDLE_WEBHOOK_SECRET: ${PADDLE_WEBHOOK_SECRET:-}
+      BILLING_TRIAL_DAYS: ${BILLING_TRIAL_DAYS:-14}
+      BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-7}
+      BILLING_DISPLAY_PRICE: ${BILLING_DISPLAY_PRICE:-29}
+      BILLING_DISPLAY_CURRENCY: ${BILLING_DISPLAY_CURRENCY:-USD}
     expose:
       - "3000"
     healthcheck:

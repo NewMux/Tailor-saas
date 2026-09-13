@@ -2,6 +2,10 @@ import { boolean, date, decimal, integer, jsonb, pgEnum, pgTable, serial, text, 
 
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
 export const organizationStatusEnum = pgEnum("organization_status", ["active", "suspended"]);
+// Mirrors Paddle's own subscription statuses (trialing/active/past_due/paused/
+// canceled) plus "expired", which Paddle has no equivalent for: it marks a
+// free trial that ran out without a subscription ever being created.
+export const subscriptionStatusEnum = pgEnum("subscription_status", ["trialing", "active", "past_due", "paused", "canceled", "expired"]);
 
 export const organizations = pgTable("organizations", {
   id: serial("id").primaryKey(),
@@ -11,6 +15,17 @@ export const organizations = pgTable("organizations", {
   // as this one and the two reference each other (see users.organizationId).
   ownerId: integer("ownerId").notNull(),
   status: organizationStatusEnum("status").notNull().default("active"),
+  // Billing. A brand-new organization starts on a self-serve trial with no
+  // Paddle records at all; the paddle* columns stay null until the owner
+  // completes a checkout and the resulting webhook is processed.
+  subscriptionStatus: subscriptionStatusEnum("subscriptionStatus").notNull().default("trialing"),
+  trialEndsAt: timestamp("trialEndsAt"),
+  paddleCustomerId: varchar("paddleCustomerId", { length: 80 }),
+  paddleSubscriptionId: varchar("paddleSubscriptionId", { length: 80 }).unique(),
+  paddlePriceId: varchar("paddlePriceId", { length: 80 }),
+  // End of the period already paid for. Also drives the past_due grace window.
+  currentPeriodEndsAt: timestamp("currentPeriodEndsAt"),
+  subscriptionUpdatedAt: timestamp("subscriptionUpdatedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
@@ -90,3 +105,23 @@ export const passwordResetTokens = pgTable("passwordResetTokens", {
   usedAt: timestamp("usedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+/**
+ * Append-only log of every Paddle webhook this deployment has accepted.
+ * "paddleEventId" is unique so a redelivered event (Paddle retries on any
+ * non-2xx, and retries are expected rather than exceptional) is recognised
+ * and skipped instead of being applied twice. Deliberately NOT tenant-scoped
+ * in server/db.ts's TENANT_TABLES: a webhook is looked up by its Paddle IDs
+ * before the organization it belongs to is known.
+ */
+export const billingEvents = pgTable("billingEvents", {
+  id: serial("id").primaryKey(),
+  paddleEventId: varchar("paddleEventId", { length: 80 }).notNull().unique(),
+  eventType: varchar("eventType", { length: 80 }).notNull(),
+  organizationId: integer("organizationId").references(() => organizations.id),
+  paddleSubscriptionId: varchar("paddleSubscriptionId", { length: 80 }),
+  occurredAt: timestamp("occurredAt").notNull(),
+  receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+  payloadJson: jsonb("payloadJson").notNull(),
+});
+export type BillingEvent = typeof billingEvents.$inferSelect;

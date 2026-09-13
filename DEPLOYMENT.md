@@ -1,87 +1,211 @@
-# Deployment (Railway)
+# Deployment: Hetzner + Coolify
 
-## Architecture
-
-One Express/tRPC process serves both the built React frontend and the `/api/*`
-backend from a single origin — there is no separate frontend host. Railway
-runs the repo's existing `Dockerfile` directly and provisions a managed
-Postgres database alongside it. No reverse proxy, TLS config, or orchestration
-platform to set up yourself — Railway handles HTTPS, the public domain, and
-restarts.
+Coolify runs one Docker Compose stack on a Hetzner server. The stack is two
+services: `postgres`, and `app` — an Express process that serves the tRPC/REST
+API, the built React frontend and the public landing page from a single origin.
 
 ```text
-Browser
-  │
-  └── https://<your-app>.up.railway.app  ──►  Railway (HTTPS, routing)
-                                                 │
-                                                 └── app service (Dockerfile)
-                                                       ├── serves the built frontend
-                                                       ├── serves the API (/api/*)
-                                                       └── Postgres (Railway-managed)
+Visitor / shop staff
+    │
+    └── https://your-domain           ──►  Coolify proxy (terminates TLS)
+                                             │
+                                             └── app service :3000
+                                                   ├── /              landing page (signed out)
+                                                   ├── /api/*         API + Paddle webhook
+                                                   └── postgres  ──►  postgres_data volume
 ```
 
-The browser sends an opaque local session token in the `Authorization`
-header; it's hashed before storage. Passwords are stored as salted scrypt
-hashes.
+There is no separate frontend host and no reverse proxy to hand-configure:
+Coolify's proxy handles the domain, HTTPS certificate and renewal.
 
-## 1. Create the Railway project
+Read [PADDLE_SETUP.md](./PADDLE_SETUP.md) alongside this. **Paddle's approval
+of a new seller usually takes several business days**, so plan to launch on the
+sandbox and flip to live when approval lands — the switch is one env var.
 
-1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → select this repository.
-2. In the same project, **+ New** → **Database** → **Add PostgreSQL**. Railway provisions it and exposes a `DATABASE_URL` you can reference from the app service.
-3. On the app service, go to **Variables** and reference the database's connection string rather than retyping it — Railway lets you pick `${{Postgres.DATABASE_URL}}` from the Postgres service.
+---
 
-## 2. Configure environment variables
+## 1. Provision the Hetzner server
 
-On the app service, set:
+Hetzner Cloud → new project → **Add Server**:
+
+| Setting | Value |
+|---|---|
+| Location | Falkenstein/Nuremberg (EU) or Ashburn (US). Hetzner has no GCC region; EU gives ~90-130 ms to the Gulf, which is fine for this app. |
+| Image | Ubuntu 24.04 LTS |
+| Type | **CPX31** (4 vCPU / 8 GB / 160 GB) for a real launch. CPX21 (3 vCPU / 4 GB) works for a pilot; below that the Docker build itself will struggle. |
+| Volume | Not required — the Postgres volume lives on the server disk. Add one if you expect heavy document storage. |
+| Backups | **Enable.** This is the cheapest insurance you will ever buy on customer data. |
+| SSH key | Add yours. Do not rely on a root password. |
+
+Point your domain's DNS at the server before installing Coolify, so the
+certificate can be issued on the first deploy:
+
+| Type | Name | Value |
+|---|---|---|
+| A | `@` (or your subdomain) | the server's IPv4 |
+| AAAA | same | the server's IPv6 (optional) |
+
+Wait for DNS to resolve (`dig +short your-domain`) before step 3.
+
+## 2. Install Coolify
+
+SSH in as root and run the official installer:
+
+```bash
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
+```
+
+Then open `http://YOUR-SERVER-IP:8000`, create the admin account **immediately**
+(the instance is unauthenticated until you do), and set up the firewall:
+
+```bash
+ufw allow OpenSSH
+ufw allow 80,443/tcp
+ufw enable
+```
+
+Leave port 8000 closed to the internet and reach the Coolify dashboard over an
+SSH tunnel (`ssh -L 8000:localhost:8000 root@YOUR-SERVER-IP`), or restrict it
+to your own IP. Do not expose Postgres publicly at all.
+
+## 3. Create the application in Coolify
+
+**Projects → New Project → New Resource → Public/Private Repository.**
+
+| Coolify field | Value |
+|---|---|
+| Repository | this repo |
+| Branch | `main` |
+| Build pack | **Docker Compose** |
+| Base directory | `/` |
+| Docker Compose location | `docker-compose.yml` |
+| Public service | `app` |
+| Public port | `3000` |
+| Domain | `https://your-domain` |
+| Database public exposure | **Disabled** |
+
+Do not add a `networks:` section or a host port mapping in Coolify's editor —
+Coolify creates the network itself, and a custom one makes its proxy routing
+intermittent. The Compose file in this repo is written for exactly this.
+
+## 4. Set the environment variables
+
+In the resource's **Environment Variables** screen. Generate real secrets — do
+not copy the placeholders:
 
 ```dotenv
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-AUTH_BASE_URL=https://<your-app>.up.railway.app
+POSTGRES_DB=tailor_erp
+POSTGRES_USER=erp
+POSTGRES_PASSWORD=<openssl rand -base64 24>
+DATABASE_URL=postgres://erp:<same password, URL-encoded>@postgres:5432/tailor_erp
+
+AUTH_BASE_URL=https://your-domain
 NODE_ENV=production
+PORT=3000
+
+PADDLE_ENVIRONMENT=sandbox
+PADDLE_API_KEY=<from Paddle>
+PADDLE_CLIENT_TOKEN=<from Paddle>
+PADDLE_PRICE_ID=<pri_... from Paddle>
+PADDLE_WEBHOOK_SECRET=<pdl_ntfset_... from Paddle>
+BILLING_TRIAL_DAYS=14
+BILLING_GRACE_DAYS=7
+BILLING_DISPLAY_PRICE=29
+BILLING_DISPLAY_CURRENCY=USD
+
 LOG_LEVEL=info
+SENTRY_DSN=
 ```
 
-- `AUTH_BASE_URL` is used to build password-reset and staff-invite links — set it to whatever public domain you'll actually use (the Railway-provided `*.up.railway.app` domain, or your custom domain once attached in step 3). Update it if you attach a custom domain later.
-- `ALLOWED_ORIGIN` and `PORT` don't need to be set — this is a single-origin deployment (no CORS needed) and Railway injects `PORT` automatically; the app already reads it.
-- `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY` — only needed if the staff-document storage proxy is used.
-- `SENTRY_DSN` — optional; leave unset to run without error monitoring.
+Two things that will bite you if you get them wrong:
 
-## 3. Domain and HTTPS
+- **`DATABASE_URL` host is `postgres`**, the Compose service name — not
+  `localhost` and not your domain.
+- **URL-encode the password** inside `DATABASE_URL` if it contains `@ : / ? # &`.
+  `openssl rand -base64 24` can emit `/` and `+`; either encode them or
+  regenerate until it doesn't.
 
-Railway gives every service a free `*.up.railway.app` subdomain with HTTPS out of the box — nothing to configure. To use your own domain instead: app service → **Settings → Networking → Custom Domain**, add the domain, and create the CNAME record it shows you at your DNS provider. Railway issues and renews the TLS certificate automatically. Update `AUTH_BASE_URL` to match once the custom domain is live.
+Leave the three Paddle credentials blank if you want to launch with billing
+switched off — nothing is paywalled in that mode.
 
-## 4. Deploy
+## 5. Deploy
 
-Pushing to `main` deploys automatically (Railway watches the connected branch by default — no separate CI/CD setup needed). The Dockerfile's `CMD` already runs migrations before starting the server:
+Press **Deploy**. Coolify builds the Dockerfile and starts the stack. Database
+migrations run automatically on container start (the image's `CMD` runs
+`drizzle-kit migrate` before the server), so there is no separate migrate step.
 
-```text
-./node_modules/.bin/drizzle-kit migrate && node dist/index.js
+Watch the logs until you see the server listening. First deploy takes several
+minutes — the image installs dependencies and builds the frontend.
+
+## 6. Point Paddle's webhook at the deployment
+
+In Paddle → **Developer tools → Notifications**, set the destination URL to:
+
+```
+https://your-domain/api/billing/webhook
 ```
 
-so every deploy applies any new migrations first, including the full multi-tenancy migration sequence (`organizations` table, `organizationId` columns and backfill) on a first deploy. Watch the **Deployments** tab for the build/deploy logs; Railway marks the service healthy once the container's health check (`GET /api/auth/session`, expects HTTP 200) passes.
+Subscribe to the eight `subscription.*` events listed in PADDLE_SETUP.md, then
+copy the destination's secret into `PADDLE_WEBHOOK_SECRET` and redeploy.
 
-To roll back, use Railway's deployment history — pick a previous successful deploy and **Redeploy** it.
+The webhook must be reachable from the public internet over HTTPS with a valid
+certificate. Paddle will not deliver to a self-signed certificate.
 
-## 5. Acceptance checklist
+---
 
-After the first deploy, verify against the live domain:
+## Acceptance checklist
 
-| Area | Check |
-|---|---|
-| Routing | `/api/auth/session` returns HTTP 200 with `{"authenticated":false,"user":null}`; `/` loads the app shell. |
-| New organization signup | Register with "Create your shop"; confirm it becomes that organization's admin with its own empty dashboard. |
-| Staff invite | From Owner Settings, invite a controlled staff email, accept the invite in a private window, confirm the account lands in the same organization with the chosen role. |
-| Tenant isolation | With two organizations, confirm neither's customers, sales, inventory, or staff are visible to the other. |
-| Persistence | Create a controlled customer/sale, redeploy, confirm it's still there. |
+Run all of this against the deployed domain before you announce it.
 
-## 6. Backups
+| # | Check | Expected |
+|---|---|---|
+| 1 | Visit `https://your-domain` signed out | Landing page, not a login form |
+| 2 | Switch the language to العربية | Whole page flips right-to-left |
+| 3 | Click "Start free trial", register a shop | Lands in the ERP dashboard |
+| 4 | Open **Subscription** | "14 days left in your free trial" |
+| 5 | Create a customer, then a tailoring order | Both save and appear in lists |
+| 6 | Register a *second* shop in a private window | Its dashboard is empty — none of shop one's data |
+| 7 | Subscribe with Paddle's test card `4242 4242 4242 4242` | Page shows "Your subscription is active" |
+| 8 | Paddle → Notifications → Logs | Delivered, HTTP 200 |
+| 9 | Force-expire the trial (SQL in PADDLE_SETUP.md) on an unsubscribed shop | Workspace replaced by the subscription screen |
+| 10 | Reload with the browser offline, make a counter sale | Sale queues locally and syncs when back online |
+| 11 | Password reset from the sign-in screen | Reset link uses your real domain, not `localhost` |
 
-Railway's Postgres plugin takes automatic daily backups on paid plans — check **Postgres service → Backups** in your project. For a manual point-in-time dump, `scripts/backup-db.sh` still works against the Railway `DATABASE_URL` (run it from anywhere with `pg_dump` installed and network access to the database, e.g. your own machine, using the public connection string Railway shows under the Postgres service's **Connect** tab).
+Checks 6 and 9 are the two that matter most: 6 proves tenant isolation, 9
+proves the paywall. Neither can be inferred from the others.
 
-## Local development
+## Backups
 
-`docker-compose.yml` is for local development only (spins up Postgres + the app together) — it isn't used for the Railway deployment, which builds the `Dockerfile` directly.
+Hetzner snapshots cover the whole server, but take a database dump you can
+restore independently:
 
-## Internal sales demo
+```bash
+docker exec -t $(docker ps -qf name=postgres) \
+  pg_dump -U erp --format=custom tailor_erp > "backup-$(date -u +%Y%m%dT%H%M%SZ).dump"
+```
 
-See [DEMO.md](./DEMO.md) for setting up and scheduling resets for the internal demo organization — the scheduling approach there (a GitHub Actions cron workflow) works with this Railway deployment without any Railway-specific setup.
+Copy it **off the server**. A backup that only exists on the machine it is
+backing up is not a backup. Schedule it in Coolify → **Scheduled Tasks**, and
+restore-test it at least once before you have real customers.
+
+## Updating
+
+Push to `main`. Coolify redeploys automatically if you enabled the webhook, or
+press **Redeploy**. Migrations run on start; new columns are additive, so a
+deploy does not need downtime.
+
+Roll back from **Deployments** — Coolify keeps previous images. Note that a
+rollback does **not** undo a database migration, so a deploy containing a
+destructive migration needs a database restore too.
+
+## Operating notes
+
+- **Logs**: Coolify → the resource → Logs. Structured JSON via pino; set
+  `LOG_LEVEL=debug` temporarily to trace a problem.
+- **Health check**: the container reports healthy via `/api/auth/session`.
+  Coolify restarts it automatically if that fails.
+- **Errors**: set `SENTRY_DSN` to get server exceptions reported.
+- **Scaling**: this is a single Node process. It comfortably serves dozens of
+  shops. Before it stops being enough you will want a managed Postgres and more
+  than one app container, which is a change to this Compose file, not to the
+  application.

@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { organizations, shopSettings, staffAccessInvites, userBusinessRoles, userCustomRoles, users, type InsertUser } from "../drizzle/schema";
-import { ENV } from "./_core/env";
+import { BILLING, ENV } from "./_core/env";
 
 let database: ReturnType<typeof drizzle> | null = null;
 
@@ -80,6 +80,11 @@ function slugify(name: string) {
  * organization it will own doesn't exist yet; both rows are only ever
  * visible to other transactions once organizationId has been set, so no
  * committed user is ever left without one.
+ *
+ * The organization starts on a free trial: trialEndsAt is stamped here, in
+ * the same transaction, so no signup can ever produce an organization with a
+ * "trialing" status and no trial deadline (which evaluateBillingAccess would
+ * treat as an expired trial and lock immediately).
  */
 export async function createOrganizationWithOwner(orgName: string, newUser: Omit<InsertUser, "organizationId" | "role">) {
   const db = await getDb();
@@ -97,7 +102,11 @@ export async function createOrganizationWithOwner(orgName: string, newUser: Omit
       slug = `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`;
     }
 
-    const [organization] = await tx.insert(organizations).values({ slug, name: orgName, ownerId: user.id }).returning();
+    const trialEndsAt = new Date(Date.now() + BILLING.trialDays * 24 * 60 * 60 * 1000);
+    const [organization] = await tx
+      .insert(organizations)
+      .values({ slug, name: orgName, ownerId: user.id, subscriptionStatus: "trialing", trialEndsAt })
+      .returning();
     if (!organization) throw new Error("Unable to create the organization");
 
     await tx.update(users).set({ organizationId: organization.id }).where(eq(users.id, user.id));

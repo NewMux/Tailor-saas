@@ -15,10 +15,12 @@ type AuthGateProps = {
   onRecoveryComplete?: () => Promise<void> | void;
   inviteToken?: string | null;
   onInviteAccepted?: () => void;
+  /** Which form to show first; set by the /login and /signup routes. */
+  initialMode?: "login" | "register";
 };
 
-export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted }: AuthGateProps) {
-  const [mode, setMode] = useState<"login" | "register" | "forgot">(inviteToken ? "register" : "login");
+export default function AuthGate({ callbackError, recoveryMode = false, resetToken, onRecoveryComplete, inviteToken, onInviteAccepted, initialMode }: AuthGateProps) {
+  const [mode, setMode] = useState<"login" | "register" | "forgot">(inviteToken ? "register" : (initialMode ?? "login"));
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
