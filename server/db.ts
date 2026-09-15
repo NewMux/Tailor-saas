@@ -12,7 +12,7 @@ let database: ReturnType<typeof drizzle> | null = null;
 // legitimately look users up before an organization is known.
 const TENANT_TABLES = [
   "userBusinessRoles", "customRoles", "userCustomRoles", "pendingAccessRequests", "staffAccessInvites",
-  "shopSettings", "customers", "measurementProfiles", "tailoringOrders", "inventoryItems", "stockMovements",
+  "shopSettings", "customers", "measurementProfiles", "tailoringOrders", "tailoringOrderPieces", "inventoryItems", "stockMovements",
   "services", "sales", "saleItems", "posSessions", "posOrders", "posPayments", "discountCodes", "invoices",
   "invoicePayments", "invoiceDeliveries", "customerBalanceDeliveries", "staffProfiles", "staffDocuments",
   "attendance", "performanceRecords", "salaryPayouts", "auditLogs",

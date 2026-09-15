@@ -1689,7 +1689,53 @@ export const erpRouter = router({
             .orderBy(invoicePayments.createdAt, invoicePayments.id)
             .limit(200),
         ]);
-        return { invoice, sale, items, shop, deliveries, paymentRecords };
+        // Only tailoring orders can opt into printing the customer's
+        // measurements, and only when the owner explicitly checked that box
+        // when the order was created - a counter sale's invoice never grows
+        // this section.
+        let measurements: {
+          customerName: string;
+          version: number;
+          effectiveDate: Date;
+          fitPreference: string | null;
+          collarStyle: string | null;
+          pocketStyle: string | null;
+          notes: string | null;
+          values: Record<string, string>;
+        } | null = null;
+        if (sale.source === "tailoring") {
+          const order = (
+            await db
+              .select({
+                measurementProfileId: tailoringOrders.measurementProfileId,
+                includeMeasurementsOnInvoice: tailoringOrders.includeMeasurementsOnInvoice,
+              })
+              .from(tailoringOrders)
+              .where(and(eq(tailoringOrders.saleId, sale.id), orgScope(tailoringOrders, ctx.organizationId)))
+              .limit(1)
+          )[0];
+          if (order?.includeMeasurementsOnInvoice && order.measurementProfileId) {
+            const profile = (
+              await db
+                .select()
+                .from(measurementProfiles)
+                .where(and(eq(measurementProfiles.id, order.measurementProfileId), orgScope(measurementProfiles, ctx.organizationId)))
+                .limit(1)
+            )[0];
+            if (profile)
+              measurements = {
+                customerName: sale.customerNameSnapshot,
+                version: profile.version,
+                effectiveDate: profile.effectiveDate,
+                fitPreference: profile.fitPreference,
+                collarStyle: profile.collarStyle,
+                pocketStyle: profile.pocketStyle,
+                notes: profile.notes,
+                values: (profile.measurementsJson as Record<string, string>) || {},
+              };
+          }
+        }
+        return { invoice, sale, items, shop, deliveries, paymentRecords, measurements };
       }),
     addPayment: tenantProcedure
       .input(invoicePaymentInput)

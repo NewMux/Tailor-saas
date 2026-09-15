@@ -20,6 +20,7 @@ import {
   staffProfiles,
   stockMovements,
   tailoringOrders,
+  tailoringOrderPieces,
   userBusinessRoles,
   userCustomRoles,
 } from "../drizzle/schema";
@@ -347,6 +348,18 @@ const quickCheckoutInput = z.object({
   note: z.string().trim().max(2000).optional(),
 });
 
+// One garment piece within a tailoring order: which fabric it uses (omitted
+// when the customer supplies their own), how many meters that piece needs,
+// and what this specific piece was quoted at. metersUsed and inventoryItemId
+// are optional at the schema level because they are legitimately absent for
+// customer-supplied fabric; superRefine below requires them together
+// whenever the order actually draws on shop stock.
+const tailoringPieceInput = z.object({
+  inventoryItemId: z.number().int().positive().optional(),
+  metersUsed: z.number().min(0).max(100000).optional(),
+  quotedPrice: z.number().min(0).max(1000000),
+});
+
 const tailoringCheckoutInput = z
   .object({
     clientReference: z.string().trim().max(120).optional(),
@@ -354,24 +367,45 @@ const tailoringCheckoutInput = z
     customerId: z.number().int().positive(),
     measurementProfileId: z.number().int().positive(),
     assignedTailorId: z.number().int().positive(),
-    serviceId: z.number().int().positive().optional(),
     garmentType: z.string().trim().min(2).max(80),
-    quantity: z.number().int().min(1).max(20),
+    pieces: z.array(tailoringPieceInput).min(1).max(20),
     dueDate: z.string().optional(),
-    orderPrice: z.number().positive(),
     paymentAmount: z.number().min(0).max(1000000),
     customerSuppliedFabric: z.boolean().default(false),
     fabricNotes: z.string().max(2000).optional(),
     paymentMethod,
     notes: z.string().max(3000),
     productionNotes: z.string().max(3000),
+    includeMeasurementsOnInvoice: z.boolean().default(false),
   })
   .superRefine((value, ctx) => {
-    if (value.paymentAmount > value.orderPrice)
+    const orderPrice = value.pieces.reduce((sum, piece) => sum + piece.quotedPrice, 0);
+    if (orderPrice <= 0)
+      ctx.addIssue({
+        code: "custom",
+        path: ["pieces"],
+        message: "Quote a price for at least one piece.",
+      });
+    if (value.paymentAmount > orderPrice + 0.001)
       ctx.addIssue({
         code: "custom",
         path: ["paymentAmount"],
         message: "The payment collected cannot exceed the quoted order price.",
+      });
+    if (!value.customerSuppliedFabric)
+      value.pieces.forEach((piece, index) => {
+        if (!piece.inventoryItemId)
+          ctx.addIssue({
+            code: "custom",
+            path: ["pieces", index, "inventoryItemId"],
+            message: `Choose a fabric for piece ${index + 1}, or mark the order as customer-supplied fabric.`,
+          });
+        if (!piece.metersUsed || piece.metersUsed <= 0)
+          ctx.addIssue({
+            code: "custom",
+            path: ["pieces", index, "metersUsed"],
+            message: `Enter the meters used for piece ${index + 1}.`,
+          });
       });
   });
 
@@ -1895,13 +1929,13 @@ export const posRouter = router({
       )[0];
       const orderNumber = `TO-${Date.now()}`;
       const saleNumber = `POS-TO-${Date.now()}`;
+      const orderPrice = input.pieces.reduce((sum, piece) => sum + piece.quotedPrice, 0);
       const paymentStatus =
-        input.paymentAmount >= input.orderPrice - 0.001
+        input.paymentAmount >= orderPrice - 0.001
           ? "paid"
           : input.paymentAmount > 0
             ? "partial"
             : ("unpaid" as const);
-      const orderTax = taxFromGross(input.orderPrice, shop);
       const transaction = await db.transaction(async tx => {
         const resolvedSession = await resolveSession(
           tx,
@@ -1952,82 +1986,60 @@ export const posRouter = router({
             code: "BAD_REQUEST",
             message: "Choose an active tailor for this production order.",
           });
-        const service = input.serviceId
-          ? (
-              await tx
-                .select()
-                .from(services)
-                .where(and(eq(services.id, input.serviceId), orgScope(services, ctx.organizationId)))
-                .limit(1)
-            )[0]
-          : null;
-        if (input.serviceId && (!service || !service.isActive))
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "The selected tailoring service is no longer available.",
-          });
-        const linkedStock = service?.inventoryItemId
-          ? (
+
+        // Meters needed per distinct fabric, summed across every piece that
+        // uses it - two thoubs sharing the same fabric must be validated and
+        // deducted against their combined need, not checked independently
+        // against the same starting stock twice.
+        const metersByItemId = new Map<number, number>();
+        if (!input.customerSuppliedFabric)
+          for (const piece of input.pieces)
+            metersByItemId.set(
+              piece.inventoryItemId!,
+              (metersByItemId.get(piece.inventoryItemId!) || 0) + (piece.metersUsed || 0)
+            );
+
+        const stockByItemId = new Map<
+          number,
+          { row: typeof inventoryItems.$inferSelect; before: number }
+        >();
+        if (!input.customerSuppliedFabric)
+          for (const [itemId, metersNeeded] of Array.from(metersByItemId)) {
+            const stock = (
               await tx
                 .select()
                 .from(inventoryItems)
-                .where(
-                  and(
-                    eq(inventoryItems.id, service.inventoryItemId),
-                    orgScope(inventoryItems, ctx.organizationId)
-                  )
-                )
+                .where(and(eq(inventoryItems.id, itemId), orgScope(inventoryItems, ctx.organizationId)))
                 .for("update")
                 .limit(1)
-            )[0]
-          : null;
-        if (service?.inventoryItemId && !linkedStock?.isActive)
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "The selected tailoring service has no active material link.",
-          });
-        const stockPerPiece = service?.inventoryItemId
-          ? Number(service.defaultFabricMeters || 1)
-          : 0;
-        const stockNeeded = input.quantity * stockPerPiece;
-        const linkedStockMovement = linkedStock
-          ? (
+            )[0];
+            if (!stock?.isActive || stock.inventoryType !== "material")
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "One of the selected fabrics is no longer available.",
+              });
+            const movement = (
               await tx
                 .select({ id: stockMovements.id })
                 .from(stockMovements)
-                .where(
-                  and(
-                    eq(stockMovements.inventoryItemId, linkedStock.id),
-                    orgScope(stockMovements, ctx.organizationId)
-                  )
-                )
+                .where(and(eq(stockMovements.inventoryItemId, stock.id), orgScope(stockMovements, ctx.organizationId)))
                 .limit(1)
-            )[0]
-          : null;
-        const linkedAvailableQuantity = linkedStock
-          ? effectiveInventoryQuantity({
-              inventoryType: linkedStock.inventoryType,
-              quantity: linkedStock.quantity,
-              rollCount: linkedStock.rollCount,
-              metersPerRoll: linkedStock.metersPerRoll,
-              hasMovement: Boolean(linkedStockMovement),
-            })
-          : 0;
-        const effectiveLinkedStock = linkedStock
-          ? linkedAvailableQuantity === Number(linkedStock.quantity)
-            ? linkedStock
-            : { ...linkedStock, quantity: money(linkedAvailableQuantity) }
-          : null;
-        if (
-          !input.customerSuppliedFabric &&
-          effectiveLinkedStock &&
-          linkedAvailableQuantity < stockNeeded
-        )
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `${effectiveLinkedStock.name} does not have enough stock for this tailoring order.`,
-          });
+            )[0];
+            const available = effectiveInventoryQuantity({
+              inventoryType: stock.inventoryType,
+              quantity: stock.quantity,
+              rollCount: stock.rollCount,
+              metersPerRoll: stock.metersPerRoll,
+              hasMovement: Boolean(movement),
+            });
+            if (available < metersNeeded - 0.0005)
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `${stock.name} does not have enough stock for this tailoring order.`,
+              });
+            stockByItemId.set(itemId, { row: stock, before: available });
+          }
+
         const orderResult = await tx
           .insert(tailoringOrders)
           .values({
@@ -2037,14 +2049,15 @@ export const posRouter = router({
             measurementProfileId: measurement.id,
             assignedTailorId: tailor.id,
             garmentType: input.garmentType,
-            quantity: input.quantity,
+            quantity: input.pieces.length,
             dueDate: input.dueDate ? new Date(input.dueDate) : null,
-            price: money(input.orderPrice),
+            price: money(orderPrice),
             customerSuppliedFabric: input.customerSuppliedFabric,
             fabricNotes: input.fabricNotes || null,
             status: "confirmed",
             notes: input.notes || null,
             productionNotes: input.productionNotes || null,
+            includeMeasurementsOnInvoice: input.includeMeasurementsOnInvoice,
             createdBy: ctx.user.id,
           })
           .returning({ id: tailoringOrders.id });
@@ -2058,11 +2071,15 @@ export const posRouter = router({
             customerId: customer.id,
             customerNameSnapshot: customer.name,
             customerPhoneSnapshot: customer.phone || null,
-            subtotal: money(orderTax.netAmount),
+            subtotal: money(
+              input.pieces.reduce((sum, piece) => sum + taxFromGross(piece.quotedPrice, shop).netAmount, 0)
+            ),
             discount: "0.000",
-            vatRate: money(orderTax.vatRate),
-            vatAmount: money(orderTax.vatAmount),
-            total: money(input.orderPrice),
+            vatRate: money(taxFromGross(orderPrice, shop).vatRate),
+            vatAmount: money(
+              input.pieces.reduce((sum, piece) => sum + taxFromGross(piece.quotedPrice, shop).vatAmount, 0)
+            ),
+            total: money(orderPrice),
             paidAmount: money(input.paymentAmount),
             paymentMethod: input.paymentMethod,
             paymentStatus,
@@ -2087,47 +2104,78 @@ export const posRouter = router({
               reference: `${orderNumber} initial payment`,
               createdBy: ctx.user.id,
             });
-        await tx
-          .insert(saleItems)
-          .values({
+
+        // One sale-item + tailoringOrderPieces row per garment piece, each
+        // carrying its own fabric and price, so the invoice can show the
+        // fabric inline with that specific piece's line.
+        for (let index = 0; index < input.pieces.length; index++) {
+          const piece = input.pieces[index];
+          const pieceNumber = index + 1;
+          const fabric =
+            !input.customerSuppliedFabric && piece.inventoryItemId
+              ? stockByItemId.get(piece.inventoryItemId)?.row || null
+              : null;
+          const fabricLabel = fabric ? `${fabric.name}${fabric.color ? ` (${fabric.color})` : ""}` : null;
+          const pieceTax = taxFromGross(piece.quotedPrice, shop);
+          const pieceLabel = input.pieces.length > 1 ? ` (piece ${pieceNumber} of ${input.pieces.length})` : "";
+
+          const saleItemResult = await tx
+            .insert(saleItems)
+            .values({
+              organizationId: ctx.organizationId,
+              saleId,
+              serviceId: null,
+              inventoryItemId: fabric?.id || null,
+              nameSnapshot: `${input.garmentType} tailoring order${fabricLabel ? ` · ${fabricLabel}` : input.customerSuppliedFabric ? " · Customer-supplied fabric" : ""}${pieceLabel}`,
+              quantity: "1.000",
+              unitPrice: money(pieceTax.netAmount),
+              lineDiscount: "0.000",
+              lineTotal: money(pieceTax.netAmount),
+              assignedTailorId: tailor.id,
+              measurementProfileId: measurement.id,
+            })
+            .returning({ id: saleItems.id });
+          const saleItemId = Number(saleItemResult[0]?.id || 0);
+
+          await tx.insert(tailoringOrderPieces).values({
             organizationId: ctx.organizationId,
-            saleId,
-            serviceId: service?.id || null,
-            inventoryItemId: linkedStock?.id || null,
-            nameSnapshot: `${service?.name || input.garmentType} tailoring order · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "unpaid"}`,
-            quantity: money(input.quantity),
-            unitPrice: money(orderTax.netAmount / input.quantity),
-            lineDiscount: "0.000",
-            lineTotal: money(orderTax.netAmount),
-            assignedTailorId: tailor.id,
-            measurementProfileId: measurement.id,
+            tailoringOrderId: orderId,
+            pieceNumber,
+            inventoryItemId: fabric?.id || null,
+            fabricNameSnapshot: fabricLabel,
+            metersUsed: fabric && piece.metersUsed ? money(piece.metersUsed) : null,
+            quotedPrice: money(piece.quotedPrice),
+            saleItemId,
           });
-        if (
-          !input.customerSuppliedFabric &&
-          effectiveLinkedStock &&
-          stockNeeded > 0
-        ) {
-          const before = linkedAvailableQuantity;
-          const after = before - stockNeeded;
+        }
+
+        // One stock movement per distinct fabric, deducting the total meters
+        // that fabric's pieces needed across the whole order.
+        for (const [itemId, { row, before }] of Array.from(stockByItemId)) {
+          const deducted = metersByItemId.get(itemId) || 0;
+          if (deducted <= 0) continue;
+          const after = before - deducted;
+          const pieceCount = input.pieces.filter(piece => piece.inventoryItemId === itemId).length;
           await tx
             .update(inventoryItems)
             .set({ quantity: money(after) })
-            .where(and(eq(inventoryItems.id, effectiveLinkedStock.id), orgScope(inventoryItems, ctx.organizationId)));
+            .where(and(eq(inventoryItems.id, itemId), orgScope(inventoryItems, ctx.organizationId)));
           await tx
             .insert(stockMovements)
             .values({
               organizationId: ctx.organizationId,
-              inventoryItemId: effectiveLinkedStock.id,
+              inventoryItemId: itemId,
               movementType: "sale",
-              quantityChange: money(-stockNeeded),
+              quantityChange: money(-deducted),
               quantityBefore: money(before),
               quantityAfter: money(after),
               referenceType: "tailoring_order",
               referenceId: orderId,
               createdBy: ctx.user.id,
-              notes: `${orderNumber} · ${money(stockPerPiece)} ${effectiveLinkedStock.unit} per piece`,
+              notes: `${orderNumber} · ${money(deducted)} ${row.unit} across ${pieceCount} piece${pieceCount === 1 ? "" : "s"}`,
             });
         }
+
         const invoiceResult = await tx
           .insert(invoices)
           .values({
@@ -2135,7 +2183,7 @@ export const posRouter = router({
             saleId,
             invoiceNumber: `${shop?.invoicePrefix || "INV"}-${String(saleId).padStart(6, "0")}`,
             status: paymentStatus,
-            notes: `${orderNumber} · ${input.garmentType} · quoted ${money(input.orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}`,
+            notes: `${orderNumber} · ${input.garmentType} · ${input.pieces.length} piece${input.pieces.length === 1 ? "" : "s"} · quoted ${money(orderPrice)} BHD incl. VAT · ${paymentStatus === "paid" ? "full payment" : paymentStatus === "partial" ? "deposit" : "no payment"} collected from POS.${input.customerSuppliedFabric ? " Customer supplied fabric." : " Shop fabric."}`,
           })
           .returning({ id: invoices.id });
         const invoiceId = Number(invoiceResult[0]?.id || 0);
@@ -2151,7 +2199,7 @@ export const posRouter = router({
               previousPaidAmount: "0.000",
               paidTotal: money(input.paymentAmount),
               remainingAmount: money(
-                Math.max(0, input.orderPrice - input.paymentAmount)
+                Math.max(0, orderPrice - input.paymentAmount)
               ),
               createdBy: ctx.user.id,
             });
@@ -2166,7 +2214,8 @@ export const posRouter = router({
           orderNumber,
           saleNumber,
           paymentAmount: input.paymentAmount,
-          orderPrice: input.orderPrice,
+          orderPrice,
+          pieceCount: input.pieces.length,
           paymentStatus,
         }
       );
