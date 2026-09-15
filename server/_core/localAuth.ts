@@ -18,6 +18,7 @@ import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInvite
 import { ENV } from "./env";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
+import { forgotPasswordRateLimiter, loginRateLimiter, registerRateLimiter, resetPasswordRateLimiter } from "./rateLimit";
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -87,20 +88,30 @@ function tokenFromRequest(req: Request) {
   return readCookie(req, SESSION_COOKIE);
 }
 
+// SameSite=Lax in every environment, never "None": this deployment is
+// always single-origin (frontend and API share one domain - see
+// DEPLOYMENT.md), so there is no legitimate cross-site request that needs
+// this cookie attached, and "None" would needlessly hand it to one anyway
+// (the classic CSRF footgun). Lax still allows the cookie on a same-site
+// top-level navigation, which is all this app ever needs.
+// Pure string builders, exported so the SameSite/Secure/HttpOnly attributes
+// can be asserted directly in tests without faking a full login/register flow
+// through a mocked database just to inspect a response header.
+export function buildSessionCookieHeader(token: string, secureCookies: boolean) {
+  const secure = secureCookies ? "; Secure" : "";
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`;
+}
+
+export function buildClearedSessionCookieHeader(secureCookies: boolean) {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookies ? "; Secure" : ""}`;
+}
+
 function setSessionCookie(res: Response, token: string) {
-  const sameSite = ENV.secureCookies ? "None" : "Lax";
-  const secure = ENV.secureCookies ? "; Secure" : "";
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
-  );
+  res.setHeader("Set-Cookie", buildSessionCookieHeader(token, ENV.secureCookies));
 }
 
 function clearSessionCookie(res: Response) {
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${ENV.secureCookies ? "None" : "Lax"}; Max-Age=0${ENV.secureCookies ? "; Secure" : ""}`
-  );
+  res.setHeader("Set-Cookie", buildClearedSessionCookieHeader(ENV.secureCookies));
 }
 
 function publicUser(user: User) {
@@ -381,7 +392,7 @@ function sendError(res: Response, error: unknown) {
 }
 
 export function registerAuthRoutes(app: Express) {
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", registerRateLimiter, async (req, res) => {
     try {
       await register(req, res);
     } catch (error) {
@@ -389,7 +400,7 @@ export function registerAuthRoutes(app: Express) {
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginRateLimiter, async (req, res) => {
     try {
       await login(req, res);
     } catch (error) {
@@ -397,7 +408,7 @@ export function registerAuthRoutes(app: Express) {
     }
   });
 
-  app.post("/api/auth/forgot", async (req, res) => {
+  app.post("/api/auth/forgot", forgotPasswordRateLimiter, async (req, res) => {
     try {
       await forgotPassword(req, res);
     } catch (error) {
@@ -405,7 +416,7 @@ export function registerAuthRoutes(app: Express) {
     }
   });
 
-  app.post("/api/auth/reset", async (req, res) => {
+  app.post("/api/auth/reset", resetPasswordRateLimiter, async (req, res) => {
     try {
       await resetPassword(req, res);
     } catch (error) {

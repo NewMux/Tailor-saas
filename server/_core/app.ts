@@ -42,6 +42,13 @@ function registerCors(app: Express) {
 export function createApp(): Express {
   const app = express();
   app.disable("x-powered-by");
+  // Trust exactly one hop (Coolify's own reverse proxy sits directly in
+  // front of this process - see DEPLOYMENT.md). Without this, req.ip and
+  // req.secure both reflect the proxy rather than the real client: every
+  // request would key off the same IP for rate limiting (making it either
+  // useless or a whole-site lockout), and the HSTS check below would never
+  // see req.secure=true behind a proxy that terminates TLS itself.
+  app.set("trust proxy", 1);
   app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === "/api/auth/session" } }));
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -49,6 +56,29 @@ export function createApp(): Express {
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     res.setHeader("Cache-Control", "no-store");
+    // Same-origin app (frontend + API share one domain), so a strict CSP
+    // costs nothing functionally. Paddle Checkout is the one third party
+    // this app talks to from the browser (server/_core/paddle.ts is the
+    // server-side API client, unrelated to this header) - its script,
+    // XHR/fetch and the checkout iframe all need an explicit allowance or
+    // billing breaks silently.
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "script-src 'self' https://cdn.paddle.com https://sandbox-cdn.paddle.com",
+        "connect-src 'self' https://api.paddle.com https://sandbox-api.paddle.com https://checkout-service.paddle.com https://checkout-service.paddle.com https://sandbox-checkout-service.paddle.com",
+        "frame-src 'self' https://buy.paddle.com https://sandbox-buy.paddle.com https://checkout.paddle.com https://sandbox-checkout.paddle.com",
+        "img-src 'self' data: https:",
+        // client/src/index.css @imports the app's two Google-Fonts families.
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' data: https://fonts.gstatic.com",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+      ].join("; ")
+    );
     if (req.secure || req.headers["x-forwarded-proto"] === "https") {
       res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
