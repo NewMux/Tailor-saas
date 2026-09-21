@@ -17,7 +17,7 @@ To run the standalone server locally, create a `.env` from `.env.example`, set `
 
 Read [DEPLOYMENT.md](./DEPLOYMENT.md) before going live. It covers deploying to Railway (git-push deploy, managed Postgres, automatic HTTPS — no reverse proxy or orchestration platform to configure), environment variables, custom domains, and an acceptance checklist.
 
-The main operator guide is [ERP-HANDOVER-MANUAL.md](./ERP-HANDOVER-MANUAL.md). Do not commit `.env` files, database dumps, reset-link files, or production credentials.
+Do not commit `.env` files, database dumps, reset-link files, or production credentials.
 
 ## Internal sales demo
 

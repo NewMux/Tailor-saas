@@ -5,6 +5,7 @@ import { initSentry } from "./sentry";
 import { createApp } from "./app";
 import { serveStatic, setupVite } from "./vite";
 import { logger } from "./logger";
+import { validateEnv } from "./env";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -26,6 +27,7 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  validateEnv();
   initSentry();
   const app = createApp();
   const server = createServer(app);
