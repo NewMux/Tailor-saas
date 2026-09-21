@@ -7,6 +7,7 @@ export type TrpcContext = {
   res: CreateExpressContextOptions["res"];
   user: User | null;
   organizationId?: number;
+  platformRole?: "support" | "superadmin";
 };
 
 export async function createContext(

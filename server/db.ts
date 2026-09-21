@@ -2,7 +2,7 @@ import type { Logger } from "drizzle-orm";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { organizations, shopSettings, staffAccessInvites, userBusinessRoles, userCustomRoles, users, type InsertUser } from "../drizzle/schema";
+import { organizations, platformStaff, shopSettings, staffAccessInvites, userBusinessRoles, userCustomRoles, users, type InsertUser } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let database: ReturnType<typeof drizzle> | null = null;
@@ -59,6 +59,31 @@ export async function getUserByEmail(email: string) {
       .select()
       .from(users)
       .where(sql`lower(${users.email}) = ${email}`)
+      .limit(1)
+  )[0];
+}
+
+// Not in TENANT_TABLES (no organizationId column, same treatment as
+// "organizations" and "users" themselves): looking up an org by its own id
+// is inherently a single-row, not a cross-tenant, query.
+export async function getOrganizationById(organizationId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  return (
+    await db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1)
+  )[0];
+}
+
+// Not in TENANT_TABLES: platform staff is deliberately org-independent (see
+// the comment on the platformStaff table in drizzle/schema.ts).
+export async function getPlatformStaffByUserId(userId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  return (
+    await db
+      .select()
+      .from(platformStaff)
+      .where(and(eq(platformStaff.userId, userId), eq(platformStaff.isActive, true)))
       .limit(1)
   )[0];
 }

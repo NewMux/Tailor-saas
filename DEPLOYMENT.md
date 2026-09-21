@@ -78,6 +78,25 @@ After the first deploy, verify against the live domain:
 
 Railway's Postgres plugin takes automatic daily backups on paid plans — check **Postgres service → Backups** in your project. For a manual point-in-time dump, `scripts/backup-db.sh` still works against the Railway `DATABASE_URL` (run it from anywhere with `pg_dump` installed and network access to the database, e.g. your own machine, using the public connection string Railway shows under the Postgres service's **Connect** tab).
 
+## 7. Granting platform-staff access
+
+Platform staff (Tafsell's own operators, as opposed to a tenant's own staff)
+is a separate concept from any organization's roles — see the comment on the
+`platformStaff` table in `drizzle/schema.ts`. There is no UI to grant the
+first one, so bootstrap it from a shell with access to `DATABASE_URL`, after
+the person has signed up for an ordinary account:
+
+```bash
+DATABASE_URL=... pnpm platform:grant-staff --email you@example.com --role superadmin
+```
+
+`--role` is `support` (read-only across organizations) or `superadmin`
+(can also suspend/reactivate organizations, grant/revoke other platform
+staff, and impersonate a user for support). Pass `--revoke` instead of
+`--role` to remove access. This script remains the documented break-glass
+path even once the ops panel can grant/revoke staff itself — the same way
+`pnpm auth:reset-links` remains the break-glass path for password resets.
+
 ## Local development
 
 `docker-compose.yml` is for local development only (spins up Postgres + the app together) — it isn't used for the Railway deployment, which builds the `Dockerfile` directly.

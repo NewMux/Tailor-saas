@@ -14,7 +14,7 @@ import {
   users,
   type User,
 } from "../../drizzle/schema";
-import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getUserByEmail, getUserById } from "../db";
+import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getOrganizationById, getUserByEmail, getUserById } from "../db";
 import { ENV } from "./env";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
@@ -284,6 +284,16 @@ async function login(req: Request, res: Response) {
       401,
       "INVALID_CREDENTIALS"
     );
+  }
+  if (user.organizationId) {
+    const organization = await getOrganizationById(user.organizationId);
+    if (organization?.status === "suspended") {
+      throw new AuthError(
+        "This organization's access has been suspended. Contact support.",
+        403,
+        "ORG_SUSPENDED"
+      );
+    }
   }
   const token = await createSession(user.id);
   setSessionCookie(res, token);

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocked = vi.hoisted(() => ({ getDb: vi.fn() }));
-vi.mock("./db", () => ({ getDb: mocked.getDb }));
+vi.mock("./db", () => ({ getDb: mocked.getDb, getOrganizationById: async () => undefined }));
 
 import { posRouter } from "./pos";
 import { getPosAvailabilityLabel, getPosCustomerId, getPosCustomerLabel, getPosLineKey } from "../client/src/lib/posCatalog";

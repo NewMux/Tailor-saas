@@ -7,13 +7,15 @@
  * ignores its argument entirely, so it can't tell a scoped query from an
  * unscoped one). Skipped automatically when no DATABASE_URL is configured.
  */
+import { ORG_SUSPENDED_ERR_MSG } from "@shared/const";
 import { and, eq } from "drizzle-orm";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   customRoles,
   customers,
   discountCodes,
   inventoryItems,
+  organizations,
   staffProfiles,
   userBusinessRoles,
 } from "../drizzle/schema";
@@ -221,6 +223,33 @@ describeIfDb("tenant isolation (real Postgres)", () => {
         .where(and(eq(customRoles.organizationId, orgB.organization.id)));
       expect(stillThere).toBeUndefined();
       expect(orgBUserRow).toBeUndefined();
+    });
+  });
+
+  describe("organization suspension", () => {
+    afterEach(async () => {
+      const db = await getDb();
+      await db!.update(organizations).set({ status: "active" }).where(eq(organizations.id, orgA.organization.id));
+    });
+
+    it("blocks the suspended org's tenant calls while leaving the other org unaffected", async () => {
+      const db = await getDb();
+      await db!.update(organizations).set({ status: "suspended" }).where(eq(organizations.id, orgA.organization.id));
+
+      await expect(callerA.customers.list({ search: "" })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: ORG_SUSPENDED_ERR_MSG,
+      });
+      await expect(callerB.customers.list({ search: "" })).resolves.toBeInstanceOf(Array);
+    });
+
+    it("restores access once the organization is reactivated", async () => {
+      const db = await getDb();
+      await db!.update(organizations).set({ status: "suspended" }).where(eq(organizations.id, orgA.organization.id));
+      await expect(callerA.customers.list({ search: "" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      await db!.update(organizations).set({ status: "active" }).where(eq(organizations.id, orgA.organization.id));
+      await expect(callerA.customers.list({ search: "" })).resolves.toBeInstanceOf(Array);
     });
   });
 

@@ -1,3 +1,5 @@
+import { clearOrgSuspended } from "@/lib/orgSuspended";
+
 type AuthUser = { id: number; name: string | null; email: string | null; role: "user" | "admin" };
 type AuthResponse = { user: AuthUser; token: string };
 
@@ -44,6 +46,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function remember(response: AuthResponse) {
   writeToken(response.token);
+  clearOrgSuspended();
   window.dispatchEvent(new Event("auth-changed"));
   return response;
 }
@@ -75,6 +78,7 @@ export const authApi = {
       await request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
     } finally {
       writeToken(null);
+      clearOrgSuspended();
       window.dispatchEvent(new Event("auth-changed"));
     }
   },

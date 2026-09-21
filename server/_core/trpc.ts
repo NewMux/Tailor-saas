@@ -1,6 +1,7 @@
-import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
+import { NOT_ADMIN_ERR_MSG, NOT_PLATFORM_STAFF_ERR_MSG, ORG_SUSPENDED_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
+import { getOrganizationById, getPlatformStaffByUserId } from "../db";
 import type { TrpcContext } from "./context";
 
 const t = initTRPC.context<TrpcContext>().create({
@@ -40,6 +41,11 @@ const requireOrganization = t.middleware(async opts => {
     });
   }
 
+  const organization = await getOrganizationById(ctx.user.organizationId);
+  if (organization?.status === "suspended") {
+    throw new TRPCError({ code: "FORBIDDEN", message: ORG_SUSPENDED_ERR_MSG });
+  }
+
   return next({
     ctx: {
       ...ctx,
@@ -56,7 +62,15 @@ const requireOrganization = t.middleware(async opts => {
  */
 export const tenantProcedure = t.procedure.use(requireUser).use(requireOrganization);
 
-export const adminProcedure = t.procedure.use(
+/**
+ * NOT platform-staff and NOT tenant-scoped: this only checks the legacy
+ * global users.role flag, which createOrganizationWithOwner (server/db.ts)
+ * sets to "admin" for every self-serve organization owner. Using this to
+ * gate a platform-only feature would silently expose it to every tenant's
+ * own owner. For cross-tenant/operator routes, use platformProcedure or
+ * superadminProcedure instead.
+ */
+export const globalUserAdminProcedure = t.procedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 
@@ -72,3 +86,39 @@ export const adminProcedure = t.procedure.use(
     });
   })
 );
+
+const requirePlatformStaff = t.middleware(async opts => {
+  const { ctx, next } = opts;
+
+  if (!ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+  const staff = await getPlatformStaffByUserId(ctx.user.id);
+  if (!staff) {
+    throw new TRPCError({ code: "FORBIDDEN", message: NOT_PLATFORM_STAFF_ERR_MSG });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+      platformRole: staff.role,
+    },
+  });
+});
+
+/** Base procedure for every cross-tenant operator (Tafsell staff) route. */
+export const platformProcedure = t.procedure.use(requireUser).use(requirePlatformStaff);
+
+const requireSuperadmin = t.middleware(async opts => {
+  const { ctx, next } = opts;
+
+  if (ctx.platformRole !== "superadmin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: NOT_PLATFORM_STAFF_ERR_MSG });
+  }
+
+  return next({ ctx });
+});
+
+/** For operator actions with real consequences: suspend/reactivate an org, grant/revoke platform staff, impersonate. */
+export const superadminProcedure = platformProcedure.use(requireSuperadmin);

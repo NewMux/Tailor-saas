@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AuthGate from "@/components/AuthGate";
+import OrganizationSuspended from "@/components/OrganizationSuspended";
+import { isOrgSuspended } from "@/lib/orgSuspended";
 import { AlertCircle, ClipboardList, FileText, LayoutDashboard, Loader2, LogOut, MoreHorizontal, Package, ReceiptText, RefreshCw, Scissors, Settings, ShoppingCart, Users, Wifi, WifiOff } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -42,13 +44,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { isArabic, t, toggleLanguage } = useLanguage();
   const [location] = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [orgSuspended, setOrgSuspended] = useState(isOrgSuspended);
   const currentPage = navigation.find(item => item.path === location) || navigation.find(item => item.path !== "/" && location.startsWith(item.path));
   const isActive = (path: string) => path === "/" ? location === "/" : location.startsWith(path);
   const moreItems = navigation.filter(item => !mobileNavigation.some(primary => primary.path === item.path));
 
+  useEffect(() => {
+    const handleOrgSuspended = () => setOrgSuspended(true);
+    window.addEventListener("org-suspended", handleOrgSuspended);
+    return () => window.removeEventListener("org-suspended", handleOrgSuspended);
+  }, []);
+
   if (loading) return <div className="flex min-h-screen items-center justify-center"><Loader2 className="animate-spin text-primary" /></div>;
   if (recoveryMode) return <AuthGate recoveryMode resetToken={resetToken} onRecoveryComplete={completeRecovery} />;
   if (!isAuthenticated) return <AuthGate callbackError={callbackError} inviteToken={inviteToken} onInviteAccepted={clearInviteToken} />;
+  if (orgSuspended) return <OrganizationSuspended onSignOut={logout} />;
 
   return <div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"}`}>
     <aside className={`fixed inset-y-0 hidden w-64 bg-white p-4 lg:block ${isArabic ? "right-0 border-l" : "left-0 border-r"}`}>

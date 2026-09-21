@@ -90,3 +90,21 @@ export const passwordResetTokens = pgTable("passwordResetTokens", {
   usedAt: timestamp("usedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+// Platform-level authority (Tafsell operator staff), deliberately separate
+// from both users.role (a legacy global flag every self-serve org owner
+// already carries — see createOrganizationWithOwner in server/db.ts) and the
+// per-organization businessRoleEnum below. Never conflate the two: a row
+// here grants cross-tenant access, so it must never be inferred from any
+// per-org role.
+export const platformStaffRoleEnum = pgEnum("platform_staff_role", ["support", "superadmin"]);
+export const platformStaff = pgTable("platformStaff", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().unique().references(() => users.id),
+  role: platformStaffRoleEnum("role").notNull().default("support"),
+  isActive: boolean("isActive").notNull().default(true),
+  grantedBy: integer("grantedBy"), // null for the initial bootstrap grant
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+export type PlatformStaff = typeof platformStaff.$inferSelect;

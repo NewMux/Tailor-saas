@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLogs, customers, measurementProfiles, staffProfiles, tailoringOrders, userBusinessRoles, userCustomRoles } from "../drizzle/schema";
 
 const { getDbMock } = vi.hoisted(() => ({ getDbMock: vi.fn() }));
-vi.mock("./db", () => ({ getDb: getDbMock }));
+vi.mock("./db", () => ({ getDb: getDbMock, getOrganizationById: async () => undefined }));
 
 import { erpRouter } from "./erp";
 

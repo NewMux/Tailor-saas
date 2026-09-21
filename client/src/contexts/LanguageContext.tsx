@@ -660,6 +660,8 @@ const ARABIC_COPY: Record<string, string> = {
   "No note": "لا توجد ملاحظة",
   "No matching transactions": "لا توجد معاملات مطابقة",
   "Delivery prepared": "تم إعداد التسليم",
+  "This organization has been suspended": "تم تعليق هذه المؤسسة",
+  "Access to this workspace has been suspended. Contact support for help restoring it.": "تم تعليق الوصول إلى مساحة العمل هذه. تواصل مع الدعم للمساعدة في استعادتها.",
 };
 
 export function getStoredLanguage(): Language {
