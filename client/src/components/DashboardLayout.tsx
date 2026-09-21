@@ -81,6 +81,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </nav>
       <div className="absolute inset-x-4 bottom-4 rounded-xl bg-muted p-3">
         <p className="truncate text-sm font-semibold">{user?.name || t("Signed-in user")}</p>
+        {user?.isPlatformStaff && <Link href="/ops" className="mt-2 block text-xs font-medium text-primary hover:underline">Platform ops</Link>}
         <div className="mt-2 flex gap-2">
           <Button data-no-translate variant="ghost" size="sm" className="h-9 flex-1 justify-center" onClick={toggleLanguage} aria-label={isArabic ? t("Switch to English") : t("Switch to Arabic")}>{isArabic ? "EN" : "عربي"}</Button>
           <Button variant="ghost" size="sm" className="h-9 flex-1 justify-center" onClick={() => logout()}><LogOut className="mr-2 h-4 w-4" />{t("Sign out")}</Button>

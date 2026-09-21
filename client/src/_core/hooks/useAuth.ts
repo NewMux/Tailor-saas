@@ -3,7 +3,7 @@ import { getInviteToken, getPasswordResetToken } from "@/lib/authCallback";
 import { trpc } from "@/lib/trpc";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type CachedUser = { id: number; name: string | null; email: string | null; role: "user" | "admin"; impersonation?: { by: string } | null };
+type CachedUser = { id: number; name: string | null; email: string | null; role: "user" | "admin"; impersonation?: { by: string } | null; isPlatformStaff?: boolean };
 const CACHED_USER_KEY = "al-hussam-erp-last-user";
 
 function readCachedUser(): CachedUser | null {
