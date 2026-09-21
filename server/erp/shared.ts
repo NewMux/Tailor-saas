@@ -1,7 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { auditLogs, customRoles, userBusinessRoles, userCustomRoles, type BusinessRole } from "../../drizzle/schema";
+import {
+  auditLogs,
+  customRoles,
+  userBusinessRoles,
+  userCustomRoles,
+  type BusinessRole,
+} from "../../drizzle/schema";
 import { orgScope, dbOrThrow } from "../_core/tenantDb";
 export { dbOrThrow };
 
@@ -197,7 +203,9 @@ export const invoicePaymentInput = z.object({
   paymentMethod: z.enum(["cash", "benefitpay", "bank_transfer", "credit_card"]),
   reference: z.string().trim().max(160).optional(),
 });
-export const invoiceDeleteInput = z.object({ invoiceId: z.number().int().positive() });
+export const invoiceDeleteInput = z.object({
+  invoiceId: z.number().int().positive(),
+});
 export const manualSaleInput = z
   .object({
     customerId: z.number().int().positive().optional(),
@@ -363,7 +371,9 @@ export const tailoringOrderStatuses = [
   "cancelled",
 ] as const;
 export const tailoringStatus = z.enum(tailoringOrderStatuses);
-export const tailoringListInput = z.object({ search: z.string().max(160).optional() });
+export const tailoringListInput = z.object({
+  search: z.string().max(160).optional(),
+});
 export const tailoringRelationError = (
   customerId: number,
   measurementCustomerId: number | null | undefined,

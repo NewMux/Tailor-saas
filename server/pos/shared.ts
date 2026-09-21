@@ -104,7 +104,10 @@ export const calculateExchangeSettlement = (
   };
 };
 
-export async function requireCounterAccess(userId: number, organizationId: number) {
+export async function requireCounterAccess(
+  userId: number,
+  organizationId: number
+) {
   const db = await dbOrThrow();
   const role = (
     await db
@@ -239,7 +242,10 @@ export async function existingTailoringCheckoutByReference(
   clientReference: string | undefined,
   organizationId: number
 ) {
-  const replay = await existingCheckoutByReference(clientReference, organizationId);
+  const replay = await existingCheckoutByReference(
+    clientReference,
+    organizationId
+  );
   if (!replay) return null;
   const db = await dbOrThrow();
   const order = (
@@ -261,7 +267,11 @@ export async function existingTailoringCheckoutByReference(
   };
 }
 
-export async function consumeDiscountUsage(tx: any, discountId: number, organizationId: number) {
+export async function consumeDiscountUsage(
+  tx: any,
+  discountId: number,
+  organizationId: number
+) {
   const updated = await tx
     .update(discountCodes)
     .set({ usedCount: sql`${discountCodes.usedCount} + 1` })
@@ -414,12 +424,21 @@ export const returnInput = z
       });
   });
 
-export async function validateSession(tx: any, sessionId: number, organizationId: number) {
+export async function validateSession(
+  tx: any,
+  sessionId: number,
+  organizationId: number
+) {
   const session = (
     await tx
       .select()
       .from(posSessions)
-      .where(and(eq(posSessions.id, sessionId), orgScope(posSessions, organizationId)))
+      .where(
+        and(
+          eq(posSessions.id, sessionId),
+          orgScope(posSessions, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (!session || session.status !== "open")
@@ -441,7 +460,12 @@ export async function resolveSession(
     await tx
       .select()
       .from(posSessions)
-      .where(and(orgScope(posSessions, organizationId), eq(posSessions.status, "open")))
+      .where(
+        and(
+          orgScope(posSessions, organizationId),
+          eq(posSessions.status, "open")
+        )
+      )
       .orderBy(desc(posSessions.openedAt))
       .limit(1)
   )[0];
@@ -480,7 +504,12 @@ export async function resolveDiscount(
     await tx
       .select()
       .from(discountCodes)
-      .where(and(eq(discountCodes.code, code.toUpperCase()), orgScope(discountCodes, organizationId)))
+      .where(
+        and(
+          eq(discountCodes.code, code.toUpperCase()),
+          orgScope(discountCodes, organizationId)
+        )
+      )
       .limit(1)
   )[0];
   if (!record || !record.isActive)
