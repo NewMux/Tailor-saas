@@ -77,6 +77,10 @@ export const authSessions = pgTable("authSessions", {
   id: serial("id").primaryKey(),
   tokenHash: varchar("tokenHash", { length: 128 }).notNull().unique(),
   userId: integer("userId").notNull(),
+  // Set only for a platform-staff impersonation session (short TTL, see
+  // IMPERSONATION_TTL_MS in server/_core/localAuth.ts) - null for an
+  // ordinary session. References the platform staff member's own userId.
+  impersonatedBy: integer("impersonatedBy").references(() => users.id),
   expiresAt: timestamp("expiresAt").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   lastUsedAt: timestamp("lastUsedAt").defaultNow().notNull(),

@@ -9,10 +9,10 @@ class SDKServer {
    * self-hosted auth endpoints. The frontend sends it as a Bearer token; the
    * HttpOnly cookie is also supported for same-origin deployments.
    */
-  async authenticateRequest(req: Request): Promise<User> {
-    const user = await getUserForRequest(req);
-    if (!user) throw ForbiddenError("Missing or invalid session");
-    return user;
+  async authenticateRequest(req: Request): Promise<{ user: User; impersonatedBy: number | null }> {
+    const result = await getUserForRequest(req);
+    if (!result) throw ForbiddenError("Missing or invalid session");
+    return result;
   }
 }
 

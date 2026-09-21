@@ -87,7 +87,7 @@ export function registerStorageProxy(app: Express) {
     }
 
     try {
-      const user = await sdk.authenticateRequest(req);
+      const { user } = await sdk.authenticateRequest(req);
       if (!user.organizationId) {
         res.status(403).send("You are not permitted to access this document.");
         return;

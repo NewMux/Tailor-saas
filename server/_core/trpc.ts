@@ -42,7 +42,7 @@ const requireOrganization = t.middleware(async opts => {
   }
 
   const organization = await getOrganizationById(ctx.user.organizationId);
-  if (organization?.status === "suspended") {
+  if (organization?.status === "suspended" && !ctx.impersonation) {
     throw new TRPCError({ code: "FORBIDDEN", message: ORG_SUSPENDED_ERR_MSG });
   }
 
@@ -113,11 +113,19 @@ export const platformProcedure = t.procedure.use(requireUser).use(requirePlatfor
 const requireSuperadmin = t.middleware(async opts => {
   const { ctx, next } = opts;
 
+  if (!ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
   if (ctx.platformRole !== "superadmin") {
     throw new TRPCError({ code: "FORBIDDEN", message: NOT_PLATFORM_STAFF_ERR_MSG });
   }
 
-  return next({ ctx });
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+    },
+  });
 });
 
 /** For operator actions with real consequences: suspend/reactivate an org, grant/revoke platform staff, impersonate. */

@@ -8,15 +8,20 @@ export type TrpcContext = {
   user: User | null;
   organizationId?: number;
   platformRole?: "support" | "superadmin";
+  /** Set only when the current session is a platform-staff impersonation session. */
+  impersonation?: { platformStaffUserId: number } | null;
 };
 
 export async function createContext(
   opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
   let user: User | null = null;
+  let impersonation: TrpcContext["impersonation"] = null;
 
   try {
-    user = await sdk.authenticateRequest(opts.req);
+    const auth = await sdk.authenticateRequest(opts.req);
+    user = auth.user;
+    impersonation = auth.impersonatedBy ? { platformStaffUserId: auth.impersonatedBy } : null;
   } catch {
     // Authentication is optional for public procedures.
     user = null;
@@ -26,5 +31,6 @@ export async function createContext(
     req: opts.req,
     res: opts.res,
     user,
+    impersonation,
   };
 }

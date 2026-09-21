@@ -7,28 +7,37 @@ type AuthErrorPayload = { error?: { message?: string; code?: string } };
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const TOKEN_KEY = "erp_local_session";
+const IMPERSONATOR_TOKEN_KEY = "erp_impersonator_session";
 
 function apiUrl(path: string) {
   return `${API_BASE_URL}${path}`;
 }
 
-function readToken() {
+function readStorageItem(key: string) {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(TOKEN_KEY);
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeToken(token: string | null) {
+function writeStorageItem(key: string, value: string | null) {
   if (typeof window === "undefined") return;
   try {
-    if (token) window.localStorage.setItem(TOKEN_KEY, token);
-    else window.localStorage.removeItem(TOKEN_KEY);
+    if (value) window.localStorage.setItem(key, value);
+    else window.localStorage.removeItem(key);
   } catch {
     // The HttpOnly cookie remains available for same-origin deployments.
   }
+}
+
+function readToken() {
+  return readStorageItem(TOKEN_KEY);
+}
+
+function writeToken(token: string | null) {
+  writeStorageItem(TOKEN_KEY, token);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -87,5 +96,21 @@ export const authApi = {
   },
   clearToken() {
     writeToken(null);
+  },
+  /** Swaps the active session to an impersonation token, stashing the platform staff member's own token to restore later. */
+  beginImpersonation(token: string) {
+    const own = readToken();
+    if (own) writeStorageItem(IMPERSONATOR_TOKEN_KEY, own);
+    writeToken(token);
+    clearOrgSuspended();
+    window.dispatchEvent(new Event("auth-changed"));
+  },
+  /** Restores the platform staff member's own session after impersonation ends. Purely local - callers must end the session server-side first. */
+  endImpersonation() {
+    const own = readStorageItem(IMPERSONATOR_TOKEN_KEY);
+    writeToken(own);
+    writeStorageItem(IMPERSONATOR_TOKEN_KEY, null);
+    clearOrgSuspended();
+    window.dispatchEvent(new Event("auth-changed"));
   },
 };

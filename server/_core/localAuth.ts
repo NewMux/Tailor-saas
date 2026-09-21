@@ -21,6 +21,7 @@ import { captureError } from "./sentry";
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const IMPERSONATION_TTL_MS = 60 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
 const SESSION_COOKIE = "erp_session";
 
@@ -107,7 +108,7 @@ function publicUser(user: User) {
   return { id: user.id, name: user.name, email: user.email, role: user.role };
 }
 
-async function createSession(userId: number) {
+async function createSessionInternal(userId: number, opts: { impersonatedBy?: number; ttlMs?: number } = {}) {
   const db = await getDb();
   if (!db)
     throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
@@ -121,13 +122,28 @@ async function createSession(userId: number) {
   await db.insert(authSessions).values({
     tokenHash: hashOpaqueToken(token),
     userId,
-    expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
+    impersonatedBy: opts.impersonatedBy ?? null,
+    expiresAt: new Date(now.getTime() + (opts.ttlMs ?? SESSION_TTL_MS)),
     lastUsedAt: now,
   });
   return token;
 }
 
-async function revokeSession(token: string | undefined) {
+async function createSession(userId: number) {
+  return createSessionInternal(userId);
+}
+
+/**
+ * Starts a short-TTL session "as" another user, for platform-staff support
+ * impersonation. Never call this directly from a route - go through
+ * server/admin.ts's impersonation.start, which is the only place that
+ * checks superadminProcedure and writes the audit trail entry.
+ */
+export async function createImpersonationSession(targetUserId: number, platformStaffUserId: number) {
+  return createSessionInternal(targetUserId, { impersonatedBy: platformStaffUserId, ttlMs: IMPERSONATION_TTL_MS });
+}
+
+export async function revokeSession(token: string | undefined) {
   if (!token) return;
   const db = await getDb();
   if (!db) return;
@@ -136,9 +152,26 @@ async function revokeSession(token: string | undefined) {
     .where(eq(authSessions.tokenHash, hashOpaqueToken(token)));
 }
 
+/** Ends an impersonation session and returns its row (for audit-log duration), or undefined if it was already gone. */
+export async function endImpersonationSession(token: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const tokenHash = hashOpaqueToken(token);
+  const session = (
+    await db.select().from(authSessions).where(eq(authSessions.tokenHash, tokenHash)).limit(1)
+  )[0];
+  if (!session) return undefined;
+  await db.delete(authSessions).where(eq(authSessions.id, session.id));
+  return session;
+}
+
+export function sessionTokenFromRequest(req: Request) {
+  return tokenFromRequest(req);
+}
+
 export async function getUserForRequest(
   req: Request
-): Promise<User | undefined> {
+): Promise<{ user: User; impersonatedBy: number | null } | undefined> {
   const token = tokenFromRequest(req);
   if (!token) return undefined;
   const db = await getDb();
@@ -161,7 +194,9 @@ export async function getUserForRequest(
     .update(authSessions)
     .set({ lastUsedAt: now })
     .where(eq(authSessions.id, session.id));
-  return getUserById(session.userId);
+  const user = await getUserById(session.userId);
+  if (!user) return undefined;
+  return { user, impersonatedBy: session.impersonatedBy };
 }
 
 async function createResetToken(userId: number) {
@@ -425,10 +460,10 @@ export function registerAuthRoutes(app: Express) {
 
   app.get("/api/auth/session", async (req, res) => {
     try {
-      const user = await getUserForRequest(req);
+      const result = await getUserForRequest(req);
       res.json({
-        authenticated: Boolean(user),
-        user: user ? publicUser(user) : null,
+        authenticated: Boolean(result),
+        user: result ? publicUser(result.user) : null,
       });
     } catch (error) {
       sendError(res, error);
