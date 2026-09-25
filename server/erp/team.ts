@@ -41,7 +41,7 @@ import {
   users,
   type BusinessRole,
 } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { getDb, getOrganizationById } from "../db";
 import {
   effectiveInventoryQuantity,
   rollDerivedQuantity,
@@ -50,7 +50,9 @@ export { rollDerivedQuantity } from "../inventoryQuantity";
 import { storageGetSignedUrl, storagePut } from "../storage";
 import { tenantProcedure, router } from "../_core/trpc";
 import { orgScope } from "../_core/tenantDb";
-import { ENV } from "../_core/env";
+import { sendEmail } from "../_core/email";
+import { staffInviteEmail } from "../_core/emailTemplates";
+import { appBaseUrl } from "../_core/urls";
 import { hashOpaqueToken, randomToken } from "../_core/localAuth";
 import {
   INVITE_TTL_MS,
@@ -540,7 +542,7 @@ export const accessRouter = router({
             acceptedAt: null,
           },
         });
-      const inviteUrl = `${(ENV.authBaseUrl || "").replace(/\/$/, "")}/?invite_token=${encodeURIComponent(token)}`;
+      const inviteUrl = `${appBaseUrl(ctx.req)}/?invite_token=${encodeURIComponent(token)}`;
       await audit(
         ctx.user.id,
         ctx.organizationId,
@@ -549,7 +551,16 @@ export const accessRouter = router({
         undefined,
         { email, roleId: role.id }
       );
-      return { email, roleName: role.name, inviteUrl };
+      const organization = await getOrganizationById(ctx.organizationId);
+      const { sent: emailSent } = await sendEmail(
+        staffInviteEmail(email, {
+          inviteeName: input.name,
+          shopName: organization?.name ?? "your shop",
+          roleName: role.name,
+          inviteUrl,
+        })
+      );
+      return { email, roleName: role.name, inviteUrl, emailSent };
     }),
   cancelInvite: tenantProcedure
     .input(z.object({ id: z.number().int().positive() }))

@@ -72,4 +72,26 @@ describe("parseEnv", () => {
   it("rejects a malformed SENTRY_DSN", () => {
     expect(parseEnv(baseEnv({ SENTRY_DSN: "not-a-url" })).success).toBe(false);
   });
+
+  it("requires each optional integration to be configured all-or-none", () => {
+    expect(parseEnv(baseEnv({ RESEND_API_KEY: "re_123" })).success).toBe(false);
+    expect(parseEnv(baseEnv({ RESEND_API_KEY: "re_123", EMAIL_FROM: "Shop <hello@example.com>" })).success).toBe(true);
+    expect(parseEnv(baseEnv({ PADDLE_API_KEY: "key", PADDLE_PRICE_ID: "pri_1" })).success).toBe(false);
+    expect(
+      parseEnv(
+        baseEnv({ PADDLE_API_KEY: "key", PADDLE_CLIENT_TOKEN: "test_tok", PADDLE_PRICE_ID: "pri_1", PADDLE_WEBHOOK_SECRET: "pdl_ntfset_1" })
+      ).success
+    ).toBe(true);
+    expect(parseEnv(baseEnv({ S3_BUCKET: "docs" })).success).toBe(false);
+  });
+
+  it("validates EMAIL_FROM, PADDLE_ENV and TRIAL_DAYS formats", () => {
+    const email = { RESEND_API_KEY: "re_123" };
+    expect(parseEnv(baseEnv({ ...email, EMAIL_FROM: "hello@example.com" })).success).toBe(true);
+    expect(parseEnv(baseEnv({ ...email, EMAIL_FROM: "not an email" })).success).toBe(false);
+    expect(parseEnv(baseEnv({ PADDLE_ENV: "live" })).success).toBe(false);
+    expect(parseEnv(baseEnv({ PADDLE_ENV: "production" })).success).toBe(true);
+    expect(parseEnv(baseEnv({ TRIAL_DAYS: "14" })).success).toBe(true);
+    expect(parseEnv(baseEnv({ TRIAL_DAYS: "two weeks" })).success).toBe(false);
+  });
 });

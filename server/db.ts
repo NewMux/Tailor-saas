@@ -1,5 +1,5 @@
 import type { Logger } from "drizzle-orm";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { organizations, platformStaff, shopSettings, staffAccessInvites, userBusinessRoles, userCustomRoles, users, type InsertUser } from "../drizzle/schema";
@@ -154,8 +154,10 @@ export async function getActiveInviteByTokenHash(tokenHash: string) {
         and(
           eq(staffAccessInvites.tokenHash, tokenHash),
           eq(staffAccessInvites.isActive, true),
-          sql`${staffAccessInvites.acceptedByUserId} IS NULL`,
-          sql`${staffAccessInvites.expiresAt} IS NOT NULL AND ${staffAccessInvites.expiresAt} > ${now}`
+          isNull(staffAccessInvites.acceptedByUserId),
+          // gt() binds `now` through the column's timestamp mapper; a raw
+          // sql`` template would hand postgres-js a bare Date and fail.
+          gt(staffAccessInvites.expiresAt, now)
         )
       )
       .limit(1)
@@ -195,7 +197,10 @@ export async function acceptInviteAndCreateUser(inviteId: number, newUser: Omit<
       isActive: true,
       updatedBy: invite.invitedBy,
     });
-    await tx.update(staffAccessInvites).set({ acceptedByUserId: user.id, acceptedAt: now }).where(eq(staffAccessInvites.id, invite.id));
+    await tx
+      .update(staffAccessInvites)
+      .set({ acceptedByUserId: user.id, acceptedAt: now })
+      .where(and(eq(staffAccessInvites.id, invite.id), eq(staffAccessInvites.organizationId, invite.organizationId)));
 
     return { user, organizationId: invite.organizationId };
   });

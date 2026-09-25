@@ -15,8 +15,11 @@ import {
   type User,
 } from "../../drizzle/schema";
 import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getOrganizationById, getUserByEmail, getUserById } from "../db";
-import { ENV } from "./env";
+import { ENV, isEmailConfigured } from "./env";
+import { sendEmail } from "./email";
+import { passwordResetEmail, welcomeEmail } from "./emailTemplates";
 import { logger } from "./logger";
+import { appBaseUrl } from "./urls";
 import { captureError } from "./sentry";
 
 const scrypt = promisify(scryptCallback);
@@ -217,8 +220,7 @@ async function createResetToken(userId: number) {
 }
 
 function resetUrl(req: Request, token: string) {
-  const base = ENV.authBaseUrl || req.headers.origin || "";
-  return `${base.replace(/\/$/, "")}/?reset_token=${encodeURIComponent(token)}`;
+  return `${appBaseUrl(req)}/?reset_token=${encodeURIComponent(token)}`;
 }
 
 async function register(req: Request, res: Response) {
@@ -272,6 +274,14 @@ async function register(req: Request, res: Response) {
           400,
           "INVITE_INVALID"
         );
+      // The invite is addressed to one person: without this check anyone
+      // who got hold of the link could join the shop under any address.
+      if (normalizeEmail(invite.email) !== email)
+        throw new AuthError(
+          "Use the email address this invite was sent to.",
+          400,
+          "INVITE_EMAIL_MISMATCH"
+        );
       const result = await acceptInviteAndCreateUser(invite.id, newUser);
       user = result.user;
     } else {
@@ -281,6 +291,14 @@ async function register(req: Request, res: Response) {
         throw new AuthError("Enter your shop or business name.");
       const result = await createOrganizationWithOwner(orgName, newUser);
       user = result.user;
+      void sendEmail(
+        welcomeEmail(email, {
+          name,
+          shopName: result.organization.name,
+          appUrl: appBaseUrl(req) || "/",
+          trialEndsAt: null,
+        })
+      );
     }
   } catch (error) {
     if (error instanceof AuthError) throw error;
@@ -340,19 +358,37 @@ async function forgotPassword(req: Request, res: Response) {
     typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
   const user = email ? await getUserByEmail(email) : undefined;
   let resetUrlValue: string | undefined;
-  if (user) {
+  if (user?.email) {
     const token = await createResetToken(user.id);
     resetUrlValue = resetUrl(req, token);
-    logger.info(
-      { email, resetUrl: resetUrlValue },
-      "Password reset link generated"
-    );
+    const { sent } = await sendEmail(passwordResetEmail(user.email, resetUrlValue));
+    if (sent) {
+      logger.info({ email }, "Password reset email sent");
+    } else {
+      // Without a mail provider the operator still needs a way to hand the
+      // link over, so it is logged, but never when it has already been
+      // emailed: a reset link in the logs is a credential.
+      logger.info({ email, resetUrl: resetUrlValue }, "Password reset link generated (email not sent)");
+    }
   }
   res.json({
-    message:
-      "If an account exists for this email, a reset link has been generated for the server administrator.",
+    message: isEmailConfigured()
+      ? "If an account exists for this email, we've sent a password reset link. Check your inbox."
+      : "If an account exists for this email, a reset link has been generated for the server administrator.",
     ...(ENV.isProduction ? {} : { resetUrl: resetUrlValue }),
   });
+}
+
+/**
+ * Lets the invite form show (and lock) the address the invite was sent to,
+ * since registration must use exactly that address.
+ */
+async function describeInvite(req: Request, res: Response) {
+  const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  const invite = token ? await getActiveInviteByTokenHash(hashOpaqueToken(token)) : undefined;
+  if (!invite) throw new AuthError("This invite link is invalid or has expired.", 404, "INVITE_INVALID");
+  const organization = await getOrganizationById(invite.organizationId);
+  res.json({ email: invite.email, name: invite.name, shopName: organization?.name ?? null });
 }
 
 async function resetPassword(req: Request, res: Response) {
@@ -453,6 +489,14 @@ export function registerAuthRoutes(app: Express) {
   app.post("/api/auth/reset", async (req, res) => {
     try {
       await resetPassword(req, res);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get("/api/auth/invite", async (req, res) => {
+    try {
+      await describeInvite(req, res);
     } catch (error) {
       sendError(res, error);
     }

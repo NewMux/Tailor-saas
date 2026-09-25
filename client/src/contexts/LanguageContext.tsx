@@ -664,6 +664,13 @@ const ARABIC_COPY: Record<string, string> = {
   "Access to this workspace has been suspended. Contact support for help restoring it.": "تم تعليق الوصول إلى مساحة العمل هذه. تواصل مع الدعم للمساعدة في استعادتها.",
   "Viewing as another user": "عرض كمستخدم آخر",
   "Exit impersonation": "إنهاء انتحال الهوية",
+  "Invited staff receive a one-time link by email. You can also copy the link and share it yourself (WhatsApp, etc).": "يتلقى الموظفون المدعوون رابطًا لمرة واحدة عبر البريد الإلكتروني. يمكنك أيضًا نسخ الرابط ومشاركته بنفسك (واتساب وغيره).",
+  "Choose one of your roles. We'll email them a one-time invite link, and you can also copy it to share directly.": "اختر أحد أدوارك. سنرسل لهم رابط دعوة لمرة واحدة عبر البريد الإلكتروني، ويمكنك أيضًا نسخه ومشاركته مباشرة.",
+  "If an account exists for this email, we've sent a password reset link. Check your inbox.": "إذا كان هناك حساب بهذا البريد الإلكتروني، فقد أرسلنا رابط إعادة تعيين كلمة المرور. تحقق من بريدك الوارد.",
+  "If an account exists for this email, a reset link has been generated for the server administrator.": "إذا كان هناك حساب بهذا البريد الإلكتروني، فقد تم إنشاء رابط إعادة التعيين لمسؤول الخادم.",
+  "Use the email address this invite was sent to.": "استخدم البريد الإلكتروني الذي أُرسلت إليه هذه الدعوة.",
+  "This invite link is invalid or has expired.": "رابط الدعوة هذا غير صالح أو منتهي الصلاحية.",
+  "Too many attempts. Please wait a few minutes and try again.": "محاولات كثيرة جدًا. يرجى الانتظار بضع دقائق ثم المحاولة مرة أخرى.",
 };
 
 export function getStoredLanguage(): Language {

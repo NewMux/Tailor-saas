@@ -2,7 +2,7 @@ import { authApi } from "@/lib/auth";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { clientBrand } from "@/lib/branding";
 import { Loader2, Scissors } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,8 +28,33 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState<string | null>(null);
+  const [inviteShopName, setInviteShopName] = useState<string | null>(null);
   const { isArabic, toggleLanguage } = useLanguage();
   const [, navigate] = useLocation();
+
+  // An invite can only be accepted with the address it was sent to, so fill
+  // that address in and lock the field rather than letting the person type
+  // a different one and hit a server-side rejection.
+  useEffect(() => {
+    if (!inviteToken) return;
+    let cancelled = false;
+    authApi
+      .inviteDetails(inviteToken)
+      .then(details => {
+        if (cancelled) return;
+        setInviteEmail(details.email);
+        setInviteShopName(details.shopName);
+        setEmail(details.email);
+        setName(current => current || details.name);
+      })
+      .catch(err => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "This invite link is invalid or has expired.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -93,7 +118,9 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
               : mode === "forgot"
                 ? "Enter your staff email and request a secure reset link."
                 : inviteToken
-                  ? "You're accepting a staff invite. Create your account to join this shop's workspace."
+                  ? inviteShopName
+                    ? `You're accepting a staff invite to ${inviteShopName}. Create your account to join its workspace.`
+                    : "You're accepting a staff invite. Create your account to join this shop's workspace."
                   : "Set up a new, independent ERP workspace for your shop. You'll be its administrator."}
         </p>
 
@@ -167,6 +194,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
                   required
                   maxLength={320}
                   autoComplete="email"
+                  readOnly={mode === "register" && Boolean(inviteEmail)}
                 />
               </div>
               {mode !== "forgot" && <div className="space-y-1.5">

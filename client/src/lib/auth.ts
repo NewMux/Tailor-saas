@@ -79,6 +79,9 @@ export const authApi = {
   async forgot(email: string) {
     return request<{ message: string; resetUrl?: string }>("/api/auth/forgot", { method: "POST", body: JSON.stringify({ email }) });
   },
+  async inviteDetails(token: string) {
+    return request<{ email: string; name: string; shopName: string | null }>(`/api/auth/invite?token=${encodeURIComponent(token)}`, { method: "GET" });
+  },
   async reset(token: string, password: string) {
     return remember(await request<AuthResponse>("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, password }) }));
   },
