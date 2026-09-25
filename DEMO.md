@@ -22,9 +22,10 @@ Register the demo organization through the app's normal sign-up flow —
 - **Password**: store it in the team's password manager. **Never commit it
   or put it in this file.**
 
-The reset script (below) never touches this user, its password, its
-organization, or its role — only the business-data tables get wiped and
-reseeded. So this registration step happens exactly once, ever; login stays
+The reset script (below) never touches this user, its password, or its
+role — only the business-data tables get wiped and reseeded. The one thing
+it sets on the organization is `billingExempt`, so the demo is never made
+read-only by subscription billing. So this registration step happens exactly once, ever; login stays
 stable across every future reset.
 
 ## Running the reset manually
