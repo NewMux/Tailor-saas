@@ -131,7 +131,8 @@ export async function createOrganizationWithOwner(orgName: string, newUser: Omit
       slug = `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`;
     }
 
-    const [organization] = await tx.insert(organizations).values({ slug, name: orgName, ownerId: user.id }).returning();
+    const trialEndsAt = new Date(Date.now() + ENV.trialDays * 24 * 60 * 60 * 1000);
+    const [organization] = await tx.insert(organizations).values({ slug, name: orgName, ownerId: user.id, trialEndsAt }).returning();
     if (!organization) throw new Error("Unable to create the organization");
 
     await tx.update(users).set({ organizationId: organization.id }).where(eq(users.id, user.id));

@@ -5,8 +5,22 @@ import { auditLogs, authSessions, organizations, platformStaff, users } from "..
 import { createImpersonationSession, endImpersonationSession, IMPERSONATION_TTL_MS, sessionTokenFromRequest } from "./_core/localAuth";
 import { platformProcedure, protectedProcedure, router, superadminProcedure } from "./_core/trpc";
 import { getDb, getUserByEmail, getUserById } from "./db";
+import { billingAccess } from "./billing/access";
+import { isBillingEnabled } from "./_core/env";
 
-const PLATFORM_AUDIT_ACTIONS = ["ORG_SUSPENDED", "ORG_REACTIVATED", "IMPERSONATION_STARTED", "IMPERSONATION_ENDED"] as const;
+const PLATFORM_AUDIT_ACTIONS = [
+  "ORG_SUSPENDED",
+  "ORG_REACTIVATED",
+  "IMPERSONATION_STARTED",
+  "IMPERSONATION_ENDED",
+  "BILLING_EXEMPT_SET",
+  "BILLING_TRIAL_EXTENDED",
+] as const;
+
+/** Billing state as shown in the ops console, e.g. "trialing", "trial_expired", "exempt". */
+function planStatus(organization: Parameters<typeof billingAccess>[0]) {
+  return billingAccess(organization, new Date(), isBillingEnabled()).reason;
+}
 
 async function dbOrThrow() {
   const db = await getDb();
@@ -96,8 +110,7 @@ const organizationsRouter = router({
       ...organization,
       userCount: userCountByOrg.get(organization.id) ?? 0,
       lastActivityAt: lastActivityByOrg.get(organization.id) ?? null,
-      // TODO(billing): replace once a subscriptions table exists.
-      planStatus: "unmetered" as const,
+      planStatus: planStatus(organization),
     }));
   }),
 
@@ -122,7 +135,7 @@ const organizationsRouter = router({
           .limit(50),
       ]);
 
-      return { organization, users: orgUsers, recentAuditLogs, planStatus: "unmetered" as const };
+      return { organization, users: orgUsers, recentAuditLogs, planStatus: planStatus(organization) };
     }),
 
   suspend: superadminProcedure
@@ -160,6 +173,49 @@ const organizationsRouter = router({
 
       await audit(organization.id, ctx.user.id, "ORG_REACTIVATED", "organization", organization.id);
       return organization;
+    }),
+
+  // Comp an organization (internal demo, partner, manual invoice) so it is
+  // never made read-only for non-payment, or remove that exemption.
+  setBillingExempt: superadminProcedure
+    .input(z.object({ organizationId: z.number().int().positive(), exempt: z.boolean(), reason: z.string().trim().min(3).max(300) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const [organization] = await db
+        .update(organizations)
+        .set({ billingExempt: input.exempt, updatedAt: new Date() })
+        .where(eq(organizations.id, input.organizationId))
+        .returning();
+      if (!organization) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found." });
+      await audit(organization.id, ctx.user.id, "BILLING_EXEMPT_SET", "organization", organization.id, { exempt: input.exempt, reason: input.reason });
+      return organization;
+    }),
+
+  // Gives a shop more trial time, e.g. while it finishes onboarding. Counts
+  // from the later of now and the current trial end, and puts a lapsed
+  // (non-paying) organization back into the trial.
+  extendTrial: superadminProcedure
+    .input(z.object({ organizationId: z.number().int().positive(), days: z.number().int().min(1).max(365) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const [current] = await db.select().from(organizations).where(eq(organizations.id, input.organizationId)).limit(1);
+      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found." });
+      if (current.subscriptionStatus === "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This organization already has an active paid subscription." });
+      }
+      const from = Math.max(Date.now(), current.trialEndsAt?.getTime() ?? 0);
+      const trialEndsAt = new Date(from + input.days * 24 * 60 * 60 * 1000);
+      const [organization] = await db
+        .update(organizations)
+        .set({ subscriptionStatus: "trialing", trialEndsAt, updatedAt: new Date() })
+        .where(eq(organizations.id, input.organizationId))
+        .returning();
+      await audit(current.id, ctx.user.id, "BILLING_TRIAL_EXTENDED", "organization", current.id, {
+        days: input.days,
+        previousStatus: current.subscriptionStatus,
+        trialEndsAt: trialEndsAt.toISOString(),
+      });
+      return organization!;
     }),
 });
 

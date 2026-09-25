@@ -2,6 +2,7 @@ import { boolean, date, decimal, integer, jsonb, pgEnum, pgTable, serial, text, 
 
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
 export const organizationStatusEnum = pgEnum("organization_status", ["active", "suspended"]);
+export const subscriptionStatusEnum = pgEnum("subscription_status", ["trialing", "active", "past_due", "paused", "canceled"]);
 
 export const organizations = pgTable("organizations", {
   id: serial("id").primaryKey(),
@@ -11,9 +12,21 @@ export const organizations = pgTable("organizations", {
   // as this one and the two reference each other (see users.organizationId).
   ownerId: integer("ownerId").notNull(),
   status: organizationStatusEnum("status").notNull().default("active"),
+  // Billing (Paddle). See server/billing/access.ts for how these decide
+  // whether the organization has full or read-only access.
+  subscriptionStatus: subscriptionStatusEnum("subscriptionStatus").notNull().default("trialing"),
+  trialEndsAt: timestamp("trialEndsAt"),
+  // Set by platform staff for comped/internal organizations (e.g. the demo).
+  billingExempt: boolean("billingExempt").notNull().default(false),
+  paddleCustomerId: varchar("paddleCustomerId", { length: 64 }),
+  paddleSubscriptionId: varchar("paddleSubscriptionId", { length: 64 }).unique("organizations_paddleSubscriptionId_unique"),
+  currentPeriodEndsAt: timestamp("currentPeriodEndsAt"),
+  // occurred_at of the last applied Paddle event; older deliveries are ignored.
+  billingEventAt: timestamp("billingEventAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
+export type SubscriptionStatus = (typeof subscriptionStatusEnum.enumValues)[number];
 export type Organization = typeof organizations.$inferSelect;
 export type InsertOrganization = typeof organizations.$inferInsert;
 
@@ -112,3 +125,12 @@ export const platformStaff = pgTable("platformStaff", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 export type PlatformStaff = typeof platformStaff.$inferSelect;
+
+// Not in TENANT_TABLES: a global idempotency log for Paddle webhook
+// deliveries, looked up by Paddle's event id before any organization is known.
+export const paddleWebhookEvents = pgTable("paddleWebhookEvents", {
+  id: serial("id").primaryKey(),
+  eventId: varchar("eventId", { length: 64 }).notNull().unique(),
+  eventType: varchar("eventType", { length: 80 }).notNull(),
+  receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+});

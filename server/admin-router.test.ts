@@ -68,7 +68,7 @@ describeIfDb("admin router (real Postgres)", () => {
     expect(ids).toContain(orgB.organization.id);
     const orgARow = superadminList.find(row => row.id === orgA.organization.id)!;
     expect(orgARow.userCount).toBeGreaterThanOrEqual(1);
-    expect(orgARow.planStatus).toBe("unmetered");
+    expect(orgARow.planStatus).toBe("billing_disabled");
 
     const supportList = await adminRouter.createCaller(contextFor(supportStaff.user)).organizations.list();
     expect(supportList.map(row => row.id)).toContain(orgB.organization.id);

@@ -8,6 +8,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { registerAuthRoutes } from "./localAuth";
 import { registerAuthRateLimits } from "./rateLimit";
 import { registerHealthRoute } from "./health";
+import { registerPaddleWebhook } from "../billing/webhook";
 import { ENV } from "./env";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
@@ -61,6 +62,7 @@ export function createApp(): Express {
   });
   registerCors(app);
   registerHealthRoute(app);
+  registerPaddleWebhook(app);
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
   registerAuthRateLimits(app);

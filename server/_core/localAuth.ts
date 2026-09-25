@@ -15,7 +15,7 @@ import {
   type User,
 } from "../../drizzle/schema";
 import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getOrganizationById, getUserByEmail, getUserById } from "../db";
-import { ENV, isEmailConfigured } from "./env";
+import { ENV, isBillingEnabled, isEmailConfigured } from "./env";
 import { sendEmail } from "./email";
 import { passwordResetEmail, welcomeEmail } from "./emailTemplates";
 import { logger } from "./logger";
@@ -296,7 +296,7 @@ async function register(req: Request, res: Response) {
           name,
           shopName: result.organization.name,
           appUrl: appBaseUrl(req) || "/",
-          trialEndsAt: null,
+          trialEndsAt: isBillingEnabled() ? result.organization.trialEndsAt : null,
         })
       );
     }

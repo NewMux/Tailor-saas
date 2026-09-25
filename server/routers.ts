@@ -3,6 +3,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { getPlatformStaffByUserId, getUserById } from "./db";
 import { erpRouter } from "./erp";
+import { publicBillingRouter } from "./erp/billing";
 import { posRouter } from "./pos";
 
 // Registration, login, logout, and password recovery are exposed by the
@@ -27,5 +28,5 @@ const authRouter = router({
   }),
 });
 
-export const appRouter = router({ system: systemRouter, auth: authRouter, erp: erpRouter, pos: posRouter, admin: adminRouter });
+export const appRouter = router({ system: systemRouter, auth: authRouter, erp: erpRouter, pos: posRouter, admin: adminRouter, billing: publicBillingRouter });
 export type AppRouter = typeof appRouter;

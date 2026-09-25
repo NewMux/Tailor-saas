@@ -1,7 +1,8 @@
 /**
  * Wipes and reseeds the internal sales-demo organization's business data.
  *
- * Never touches organizations/users/userBusinessRoles/shopSettings — the demo
+ * Never touches users/userBusinessRoles/shopSettings (and on organizations,
+ * only sets billingExempt so the demo is never made read-only) — the demo
  * org, its owner login, and its branding are created exactly once, manually,
  * through the app's normal "Create your shop" sign-up (see DEMO.md). This
  * script only clears and rebuilds the business-data tables so the demo never
@@ -129,6 +130,10 @@ async function main() {
   }
 
   console.log(`Resetting demo data for organization ${organizationId} (owner: ${DEMO_OWNER_EMAIL})...`);
+
+  // The demo is internal and never pays: keep it exempt from billing so it
+  // never turns read-only (which would also make the reseed below fail).
+  await db.update(organizations).set({ billingExempt: true }).where(eq(organizations.id, organizationId));
 
   await step("wipe phase", () =>
     db.transaction(async tx => {

@@ -1,4 +1,6 @@
-import { NOT_ADMIN_ERR_MSG, NOT_PLATFORM_STAFF_ERR_MSG, ORG_SUSPENDED_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
+import { BILLING_READ_ONLY_ERR_MSG, NOT_ADMIN_ERR_MSG, NOT_PLATFORM_STAFF_ERR_MSG, ORG_SUSPENDED_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
+import { billingAccess } from "../billing/access";
+import { isBillingEnabled } from "./env";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { getOrganizationById, getPlatformStaffByUserId } from "../db";
@@ -28,7 +30,7 @@ const requireUser = t.middleware(async opts => {
 
 export const protectedProcedure = t.procedure.use(requireUser);
 
-const requireOrganization = t.middleware(async opts => {
+const requireOrganizationFor = (options: { enforceBilling: boolean }) => t.middleware(async opts => {
   const { ctx, next } = opts;
 
   if (!ctx.user) {
@@ -45,6 +47,18 @@ const requireOrganization = t.middleware(async opts => {
   if (organization?.status === "suspended" && !ctx.impersonation) {
     throw new TRPCError({ code: "FORBIDDEN", message: ORG_SUSPENDED_ERR_MSG });
   }
+  // Unpaid organizations are read-only: queries keep working (so the shop
+  // can still look things up and export), mutations are refused. Platform
+  // staff impersonating for support are not blocked.
+  if (
+    options.enforceBilling &&
+    opts.type === "mutation" &&
+    organization &&
+    !ctx.impersonation &&
+    billingAccess(organization, new Date(), isBillingEnabled()).access === "read_only"
+  ) {
+    throw new TRPCError({ code: "FORBIDDEN", message: BILLING_READ_ONLY_ERR_MSG });
+  }
 
   return next({
     ctx: {
@@ -60,7 +74,14 @@ const requireOrganization = t.middleware(async opts => {
  * ctx.organizationId is set so scopedDb() (server/_core/tenantDb.ts) always
  * has a non-null value to filter/stamp queries with.
  */
-export const tenantProcedure = t.procedure.use(requireUser).use(requireOrganization);
+export const tenantProcedure = t.procedure.use(requireUser).use(requireOrganizationFor({ enforceBilling: true }));
+
+/**
+ * Tenant-scoped, but exempt from read-only billing enforcement. Only for the
+ * billing routes themselves: an unpaid shop must still be able to open the
+ * customer portal and pay.
+ */
+export const tenantBillingProcedure = t.procedure.use(requireUser).use(requireOrganizationFor({ enforceBilling: false }));
 
 /**
  * NOT platform-staff and NOT tenant-scoped: this only checks the legacy

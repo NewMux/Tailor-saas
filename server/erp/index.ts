@@ -12,6 +12,7 @@ import { staffRouter } from "./staff";
 import { tailoringRouter } from "./tailoring";
 import { teamRouter, accessRouter, accessApprovalRouter } from "./team";
 import { auditProcedure } from "./audit";
+import { billingRouter } from "./billing";
 
 export const erpRouter = router({
   shop: shopRouter,
@@ -28,4 +29,5 @@ export const erpRouter = router({
   access: accessRouter,
   accessApproval: accessApprovalRouter,
   audit: auditProcedure,
+  billing: billingRouter,
 });
