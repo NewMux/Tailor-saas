@@ -18,6 +18,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
 export default function OrganizationDetail() {
@@ -47,6 +48,27 @@ export default function OrganizationDetail() {
       utils.admin.organizations.detail.invalidate({ organizationId });
       utils.admin.organizations.list.invalidate();
       toast.success("Organization reactivated");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const [exemptReason, setExemptReason] = useState("");
+  const [trialDays, setTrialDays] = useState("14");
+  const refreshDetail = () => {
+    utils.admin.organizations.detail.invalidate({ organizationId });
+    utils.admin.organizations.list.invalidate();
+  };
+  const setBillingExempt = trpc.admin.organizations.setBillingExempt.useMutation({
+    onSuccess: organization => {
+      refreshDetail();
+      setExemptReason("");
+      toast.success(organization.billingExempt ? "Billing exemption granted" : "Billing exemption removed");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const extendTrial = trpc.admin.organizations.extendTrial.useMutation({
+    onSuccess: () => {
+      refreshDetail();
+      toast.success("Trial extended");
     },
     onError: error => toast.error(error.message),
   });
@@ -107,6 +129,46 @@ export default function OrganizationDetail() {
             </AlertDialogContent>
           </AlertDialog>
         )}
+      </div>
+
+      <div className="rounded-xl border bg-white">
+        <div className="border-b px-4 py-3"><h2 className="text-sm font-semibold">Billing</h2></div>
+        <div className="space-y-4 p-4 text-sm">
+          <dl className="grid gap-3 sm:grid-cols-3">
+            <div><dt className="text-muted-foreground">Subscription</dt><dd className="font-medium">{organization.subscriptionStatus}{organization.billingExempt ? " (exempt)" : ""}</dd></div>
+            <div><dt className="text-muted-foreground">Trial ends</dt><dd className="font-medium">{organization.trialEndsAt ? new Date(organization.trialEndsAt).toLocaleDateString() : "—"}</dd></div>
+            <div><dt className="text-muted-foreground">Paid through</dt><dd className="font-medium">{organization.currentPeriodEndsAt ? new Date(organization.currentPeriodEndsAt).toLocaleDateString() : "—"}</dd></div>
+            <div className="sm:col-span-3"><dt className="text-muted-foreground">Paddle</dt><dd className="break-all font-mono text-xs">{organization.paddleCustomerId ?? "no customer"} · {organization.paddleSubscriptionId ?? "no subscription"}</dd></div>
+          </dl>
+          <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end">
+            <div className="flex-1 space-y-1.5">
+              <label className="text-xs text-muted-foreground" htmlFor="exempt-reason">Reason (required to change exemption)</label>
+              <Input id="exempt-reason" value={exemptReason} onChange={event => setExemptReason(event.target.value)} maxLength={300} placeholder="e.g. Partner shop, invoiced manually" />
+            </div>
+            <Button
+              variant="outline"
+              disabled={exemptReason.trim().length < 3 || setBillingExempt.isPending}
+              onClick={() => setBillingExempt.mutate({ organizationId, exempt: !organization.billingExempt, reason: exemptReason.trim() })}
+            >
+              {organization.billingExempt ? "Remove exemption" : "Make billing-exempt"}
+            </Button>
+          </div>
+          {organization.subscriptionStatus !== "active" && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground" htmlFor="trial-days">Extend trial by (days)</label>
+                <Input id="trial-days" type="number" min={1} max={365} value={trialDays} onChange={event => setTrialDays(event.target.value)} className="w-32" />
+              </div>
+              <Button
+                variant="outline"
+                disabled={!(Number(trialDays) >= 1 && Number(trialDays) <= 365) || extendTrial.isPending}
+                onClick={() => extendTrial.mutate({ organizationId, days: Math.floor(Number(trialDays)) })}
+              >
+                Extend trial
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-xl border bg-white">

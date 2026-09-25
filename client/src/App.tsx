@@ -14,6 +14,8 @@ import WorkforceHub from "./pages/WorkforceHub";
 import SalesHistory from "./pages/SalesHistory";
 import NotFound from "./pages/NotFound";
 import OpsApp from "./pages/ops/OpsApp";
+import Billing from "./pages/Billing";
+import PublicPages, { PUBLIC_PATHS } from "./pages/public/PublicPages";
 import { Route, Switch, useLocation } from "wouter";
 
 // The platform-ops console (/ops/*) is a separate shell for Tafsell staff,
@@ -22,6 +24,8 @@ import { Route, Switch, useLocation } from "wouter";
 function App() {
   const [location] = useLocation();
   const isOpsRoute = location === "/ops" || location.startsWith("/ops/");
-  return <ErrorBoundary><ThemeProvider defaultTheme="light"><LanguageProvider><TooltipProvider><Toaster />{isOpsRoute ? <OpsApp /> : <OfflineSyncProvider><DashboardLayout><Switch><Route path="/" component={() => <ErpWorkspace section="dashboard" />} /><Route path="/customers" component={CustomerMaintenance} /><Route path="/inventory" component={() => <ErpWorkspace section="inventory" />} /><Route path="/tailoring" component={TailoringOrders} /><Route path="/sales" component={PointOfSale} /><Route path="/sales-history" component={SalesHistory} /><Route path="/invoices" component={() => <ErpWorkspace section="invoices" />} /><Route path="/team" component={WorkforceHub} /><Route path="/settings" component={OwnerSettings} /><Route path="/audit" component={() => <ErpWorkspace section="audit" />} /><Route component={NotFound} /></Switch></DashboardLayout></OfflineSyncProvider>}</TooltipProvider></LanguageProvider></ThemeProvider></ErrorBoundary>;
+  // Public pages (pricing and legal) must be reachable without signing in.
+  const isPublicRoute = PUBLIC_PATHS.includes(location);
+  return <ErrorBoundary><ThemeProvider defaultTheme="light"><LanguageProvider><TooltipProvider><Toaster />{isPublicRoute ? <PublicPages /> : isOpsRoute ? <OpsApp /> : <OfflineSyncProvider><DashboardLayout><Switch><Route path="/" component={() => <ErpWorkspace section="dashboard" />} /><Route path="/customers" component={CustomerMaintenance} /><Route path="/inventory" component={() => <ErpWorkspace section="inventory" />} /><Route path="/tailoring" component={TailoringOrders} /><Route path="/sales" component={PointOfSale} /><Route path="/sales-history" component={SalesHistory} /><Route path="/invoices" component={() => <ErpWorkspace section="invoices" />} /><Route path="/team" component={WorkforceHub} /><Route path="/settings" component={OwnerSettings} /><Route path="/audit" component={() => <ErpWorkspace section="audit" />} /><Route path="/billing" component={Billing} /><Route component={NotFound} /></Switch></DashboardLayout></OfflineSyncProvider>}</TooltipProvider></LanguageProvider></ThemeProvider></ErrorBoundary>;
 }
 export default App;

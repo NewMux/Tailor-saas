@@ -1,5 +1,6 @@
 import { authApi } from "@/lib/auth";
 import { checkOrgSuspendedError } from "@/lib/orgSuspended";
+import { checkBillingReadOnlyError } from "@/lib/billingReadOnly";
 import { trpc } from "@/lib/trpc";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
@@ -31,6 +32,7 @@ queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     console.error("[API Query Error]", event.query.state.error);
     checkOrgSuspendedError(event.query.state.error);
+    checkBillingReadOnlyError(event.query.state.error);
   }
 });
 
@@ -38,6 +40,7 @@ queryClient.getMutationCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     console.error("[API Mutation Error]", event.mutation.state.error);
     checkOrgSuspendedError(event.mutation.state.error);
+    checkBillingReadOnlyError(event.mutation.state.error);
   }
 });
 

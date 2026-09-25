@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AuthGate from "@/components/AuthGate";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
+import BillingBanner from "@/components/BillingBanner";
+import { trpc } from "@/lib/trpc";
 import OrganizationSuspended from "@/components/OrganizationSuspended";
 import { isOrgSuspended } from "@/lib/orgSuspended";
-import { AlertCircle, ClipboardList, FileText, LayoutDashboard, Loader2, LogOut, MoreHorizontal, Package, ReceiptText, RefreshCw, Scissors, Settings, ShoppingCart, Users, Wifi, WifiOff } from "lucide-react";
+import { AlertCircle, ClipboardList, CreditCard, FileText, LayoutDashboard, Loader2, LogOut, MoreHorizontal, Package, ReceiptText, RefreshCw, Scissors, Settings, ShoppingCart, Users, Wifi, WifiOff } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { clientBrand } from "@/lib/branding";
@@ -12,7 +14,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useOfflineSync } from "@/contexts/OfflineSyncContext";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-const navigation = [
+const allNavigation = [
   { label: "Overview", path: "/", icon: LayoutDashboard },
   { label: "Customers", path: "/customers", icon: Users },
   { label: "Inventory", path: "/inventory", icon: Package },
@@ -23,9 +25,10 @@ const navigation = [
   { label: "Staff & Payroll", path: "/team", icon: Users },
   { label: "Shop Settings", path: "/settings", icon: Settings },
   { label: "Audit Trail", path: "/audit", icon: ClipboardList },
+  { label: "Billing", path: "/billing", icon: CreditCard },
 ];
 
-const mobileNavigation = ["/", "/customers", "/sales", "/tailoring"].map(path => navigation.find(item => item.path === path)!);
+const mobilePaths = ["/", "/customers", "/sales", "/tailoring"];
 
 function ConnectionStatus() {
   const { isOnline, pendingCount, isSyncing, syncError, syncNow } = useOfflineSync();
@@ -46,6 +49,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [location] = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
   const [orgSuspended, setOrgSuspended] = useState(isOrgSuspended);
+  // Shares its cache entry with BillingBanner; only used to hide the Billing
+  // nav item when billing isn't configured for this deployment.
+  const billing = trpc.erp.billing.status.useQuery(undefined, { enabled: isAuthenticated && !orgSuspended && !recoveryMode, staleTime: 5 * 60 * 1000 });
+  const navigation = allNavigation.filter(item => item.path !== "/billing" || billing.data?.billingEnabled);
+  const mobileNavigation = mobilePaths.map(path => navigation.find(item => item.path === path)!);
   const currentPage = navigation.find(item => item.path === location) || navigation.find(item => item.path !== "/" && location.startsWith(item.path));
   const isActive = (path: string) => path === "/" ? location === "/" : location.startsWith(path);
   const moreItems = navigation.filter(item => !mobileNavigation.some(primary => primary.path === item.path));
@@ -109,7 +117,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
     </header>
 
-    <main className={`px-4 py-5 pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:px-5 sm:py-6 lg:p-8 ${isArabic ? "lg:mr-64 lg:ml-0" : "lg:ml-64 lg:mr-0"}`}>{children}</main>
+    <main className={`px-4 py-5 pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:px-5 sm:py-6 lg:p-8 ${isArabic ? "lg:mr-64 lg:ml-0" : "lg:ml-64 lg:mr-0"}`}><BillingBanner />{children}</main>
 
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 px-2 pb-[env(safe-area-inset-bottom)] pt-2 shadow-[0_-8px_24px_rgba(31,41,55,0.08)] backdrop-blur lg:hidden" aria-label={t("Main navigation")}>
       <div className="mx-auto grid max-w-md grid-cols-5 gap-1">

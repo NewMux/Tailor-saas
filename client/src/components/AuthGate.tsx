@@ -3,7 +3,8 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { clientBrand } from "@/lib/branding";
 import { Loader2, Scissors } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
+import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +33,8 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
   const [inviteShopName, setInviteShopName] = useState<string | null>(null);
   const { isArabic, toggleLanguage } = useLanguage();
   const [, navigate] = useLocation();
+  const plan = trpc.billing.plan.useQuery(undefined, { staleTime: 60 * 60 * 1000 });
+  const trialDays = plan.data?.billingEnabled ? plan.data.trialDays : 0;
 
   // An invite can only be accepted with the address it was sent to, so fill
   // that address in and lock the field rather than letting the person type
@@ -123,6 +126,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
                     : "You're accepting a staff invite. Create your account to join this shop's workspace."
                   : "Set up a new, independent ERP workspace for your shop. You'll be its administrator."}
         </p>
+        {!recoveryMode && mode === "register" && !inviteToken && trialDays > 0 && <p className="mt-2 text-center text-sm font-medium text-emerald-700">{`${trialDays}-day free trial, no card required`}</p>}
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
           {recoveryMode ? (
@@ -247,6 +251,12 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
             {mode === "register" ? "Already have an account? Sign in" : "Need an account? Register"}
           </button>
         </div>}
+        <nav className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-1 border-t pt-4 text-xs text-muted-foreground" aria-label="Legal">
+          <Link href="/pricing" className="hover:underline">Pricing</Link>
+          <Link href="/terms" className="hover:underline">Terms</Link>
+          <Link href="/privacy" className="hover:underline">Privacy</Link>
+          <Link href="/refunds" className="hover:underline">Refunds</Link>
+        </nav>
       </div>
     </main>
   );

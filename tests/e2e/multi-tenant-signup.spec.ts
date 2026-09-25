@@ -6,6 +6,10 @@ const orgTwo = { name: "Owner Two", orgName: `Shop Two ${stamp}`, email: `owner2
 
 async function registerNewOrg(page: import("@playwright/test").Page, org: typeof orgOne) {
   await page.goto("/");
+  // Wait for the auth screen to finish loading before deciding whether to
+  // switch to the register form; counting immediately after goto() races
+  // the initial session check and can see neither form yet.
+  await expect(page.getByText("Sign in to Tafsell").or(page.getByText("Create your shop"))).toBeVisible();
   const needAccount = page.getByText("Need an account? Register");
   if (await needAccount.count()) await needAccount.click();
   await expect(page.getByText("Create your shop")).toBeVisible();
