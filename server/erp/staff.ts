@@ -47,7 +47,7 @@ import {
   rollDerivedQuantity,
 } from "../inventoryQuantity";
 export { rollDerivedQuantity } from "../inventoryQuantity";
-import { storageGetSignedUrl, storagePut } from "../storage";
+import { isStorageConfigured, storageGetSignedUrl, storagePut } from "../storage";
 import { tenantProcedure, router } from "../_core/trpc";
 import { orgScope } from "../_core/tenantDb";
 import { ENV } from "../_core/env";
@@ -166,6 +166,11 @@ export const staffRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await access(ctx.user.id, ctx.organizationId, payrollRoles);
+        if (!isStorageConfigured())
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Document storage is not set up on this server yet.",
+          });
         const profile = (
           await (
             await dbOrThrow()
@@ -187,7 +192,7 @@ export const staffRouter = router({
           });
         const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
         const stored = await storagePut(
-          `staff/${input.staffProfileId}/${Date.now()}-${safeName}`,
+          `org/${ctx.organizationId}/staff/${input.staffProfileId}/${Date.now()}-${safeName}`,
           Buffer.from(input.dataBase64, "base64"),
           input.contentType
         );
