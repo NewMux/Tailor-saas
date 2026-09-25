@@ -100,7 +100,7 @@ jobs:
       - name: Start server
         run: |
           nohup node dist/index.js > server.log 2>&1 &
-          timeout 30 bash -c 'until curl -sf http://localhost:3000/api/auth/session >/dev/null; do sleep 1; done'
+          timeout 30 bash -c 'until curl -sf http://localhost:3000/api/health >/dev/null; do sleep 1; done'
         env:
           NODE_ENV: production
           PORT: 3000

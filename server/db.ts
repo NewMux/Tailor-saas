@@ -6,6 +6,7 @@ import { organizations, platformStaff, shopSettings, staffAccessInvites, userBus
 import { ENV } from "./_core/env";
 
 let database: ReturnType<typeof drizzle> | null = null;
+let client: ReturnType<typeof postgres> | null = null;
 
 // Every table that must always be filtered/stamped by organizationId.
 // "users" is deliberately excluded: login/session/invite-acceptance queries
@@ -37,10 +38,18 @@ const tenantGuardEnabled = process.env.NODE_ENV === "test" || process.env.TENANT
 
 export async function getDb() {
   if (!database && ENV.databaseUrl) {
-    const client = postgres(ENV.databaseUrl, { prepare: false });
+    client = postgres(ENV.databaseUrl, { prepare: false });
     database = tenantGuardEnabled ? drizzle(client, { logger: new TenantGuardLogger() }) : drizzle(client);
   }
   return database;
+}
+
+/** Drains and closes the connection pool; used on graceful shutdown. */
+export async function closeDb() {
+  if (!client) return;
+  await client.end({ timeout: 5 });
+  client = null;
+  database = null;
 }
 
 export async function getUserById(userId: number) {

@@ -6,6 +6,8 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { registerStorageProxy } from "./storageProxy";
 import { registerAuthRoutes } from "./localAuth";
+import { registerAuthRateLimits } from "./rateLimit";
+import { registerHealthRoute } from "./health";
 import { ENV } from "./env";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
@@ -36,12 +38,16 @@ function registerCors(app: Express) {
 
 /**
  * Builds the Express app shared by the local development server and the
- * standalone Hetzner production process.
+ * production process.
  */
 export function createApp(): Express {
   const app = express();
   app.disable("x-powered-by");
-  app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === "/api/auth/session" } }));
+  // Railway (and most PaaS hosts) terminate TLS at one proxy hop in front of
+  // the container. Trusting exactly one hop makes req.ip / req.secure reflect
+  // the real client, which rate limiting and HSTS depend on.
+  app.set("trust proxy", 1);
+  app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === "/api/auth/session" || req.url === "/api/health" } }));
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -54,8 +60,10 @@ export function createApp(): Express {
     next();
   });
   registerCors(app);
+  registerHealthRoute(app);
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
+  registerAuthRateLimits(app);
   registerAuthRoutes(app);
   registerStorageProxy(app);
   app.use(

@@ -6,6 +6,7 @@ import { createApp } from "./app";
 import { serveStatic, setupVite } from "./vite";
 import { logger } from "./logger";
 import { validateEnv } from "./env";
+import { closeDb } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -40,7 +41,10 @@ async function startServer() {
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  // Only hunt for a free port in local development. In production the
+  // platform routes traffic to exactly PORT, so silently binding elsewhere
+  // would leave the app unreachable while looking healthy in the logs.
+  const port = process.env.NODE_ENV === "development" ? await findAvailablePort(preferredPort) : preferredPort;
 
   if (port !== preferredPort) {
     logger.warn({ preferredPort, port }, "Preferred port busy, using fallback port");
@@ -49,6 +53,31 @@ async function startServer() {
   server.listen(port, () => {
     logger.info({ port }, "Server listening");
   });
+
+  // Deploys and restarts send SIGTERM: stop accepting connections, let
+  // in-flight requests (e.g. a POS checkout) finish, then close the pool.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, "Shutting down");
+    const forceExit = setTimeout(() => {
+      logger.warn("Graceful shutdown timed out, forcing exit");
+      process.exit(1);
+    }, 10_000);
+    forceExit.unref();
+    server.close(async () => {
+      try {
+        await closeDb();
+      } catch (err) {
+        logger.error({ err }, "Error closing database pool");
+      }
+      process.exit(0);
+    });
+    server.closeIdleConnections?.();
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 startServer().catch(err => {
