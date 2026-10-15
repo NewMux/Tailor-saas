@@ -4,7 +4,7 @@
 export const legalConfig = {
   legalBusinessName: "[YOUR LEGAL BUSINESS NAME]",
   businessAddress: "[YOUR REGISTERED BUSINESS ADDRESS]",
-  supportEmail: "[support@yourdomain.com]",
+  supportEmail: "info@newmux.com",
   governingLaw: "[COUNTRY / JURISDICTION]",
   refundWindowDays: 14,
   lastUpdated: "[DATE]",
