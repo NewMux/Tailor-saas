@@ -14,7 +14,7 @@ import {
   users,
   type User,
 } from "../../drizzle/schema";
-import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getOrganizationById, getUserByEmail, getUserById } from "../db";
+import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getOrganizationById, getPlatformStaffByUserId, getUserByEmail, getUserById } from "../db";
 import { ENV, isBillingEnabled, isEmailConfigured } from "./env";
 import { sendEmail } from "./email";
 import { passwordResetEmail, welcomeEmail } from "./emailTemplates";
@@ -52,6 +52,10 @@ async function hashPassword(password: string) {
   const derived = (await scrypt(password, salt, 64)) as Buffer;
   return `$scrypt$${salt.toString("base64url")}$${derived.toString("base64url")}`;
 }
+
+// Verified against when the email is unknown, so a failed login costs one
+// scrypt either way and response time doesn't reveal which emails exist.
+const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(16).toString("hex"));
 
 async function verifyPassword(password: string, stored: string) {
   const parts = stored.split("$");
@@ -91,19 +95,22 @@ function tokenFromRequest(req: Request) {
   return readCookie(req, SESSION_COOKIE);
 }
 
+// SameSite=Lax: the frontend and API share one origin, so the cookie is
+// never needed on cross-site requests, and withholding it there blocks
+// cross-site request forgery against cookie-authenticated endpoints. (The
+// app's own requests authenticate with the Bearer token anyway.)
 function setSessionCookie(res: Response, token: string) {
-  const sameSite = ENV.secureCookies ? "None" : "Lax";
   const secure = ENV.secureCookies ? "; Secure" : "";
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
   );
 }
 
 function clearSessionCookie(res: Response) {
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${ENV.secureCookies ? "None" : "Lax"}; Max-Age=0${ENV.secureCookies ? "; Secure" : ""}`
+    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${ENV.secureCookies ? "; Secure" : ""}`
   );
 }
 
@@ -168,6 +175,20 @@ export async function endImpersonationSession(token: string) {
   return session;
 }
 
+/** Signs a user out everywhere, e.g. after a password reset or removal from their shop. */
+export async function revokeAllSessionsForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(authSessions).where(eq(authSessions.userId, userId));
+}
+
+/** Ends every impersonation session a platform-staff member started, e.g. when their access is revoked. */
+export async function revokeImpersonationSessionsBy(platformStaffUserId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(authSessions).where(eq(authSessions.impersonatedBy, platformStaffUserId));
+}
+
 export function sessionTokenFromRequest(req: Request) {
   return tokenFromRequest(req);
 }
@@ -193,6 +214,15 @@ export async function getUserForRequest(
       .limit(1)
   )[0];
   if (!session) return undefined;
+  // An impersonation session is only as good as the superadmin access that
+  // started it: once that is revoked, the session stops working at once.
+  if (session.impersonatedBy !== null) {
+    const impersonator = await getPlatformStaffByUserId(session.impersonatedBy);
+    if (impersonator?.role !== "superadmin") {
+      await db.delete(authSessions).where(eq(authSessions.id, session.id));
+      return undefined;
+    }
+  }
   await db
     .update(authSessions)
     .set({ lastUsedAt: now })
@@ -320,11 +350,11 @@ async function login(req: Request, res: Response) {
   const password =
     typeof req.body?.password === "string" ? req.body.password : "";
   const user = email ? await getUserByEmail(email) : undefined;
-  if (
-    !user ||
-    !user.passwordHash ||
-    !(await verifyPassword(password, user.passwordHash))
-  ) {
+  const passwordMatches = await verifyPassword(
+    password,
+    user?.passwordHash ?? (await DUMMY_PASSWORD_HASH)
+  );
+  if (!user || !user.passwordHash || !passwordMatches) {
     if (user && !user.passwordHash) {
       throw new AuthError(
         "This account needs a password reset before it can sign in.",
@@ -422,16 +452,28 @@ async function resetPassword(req: Request, res: Response) {
       "RESET_TOKEN_INVALID"
     );
 
+  // Claim the token atomically before changing anything: of two concurrent
+  // requests with the same link, only one gets a row back.
+  const [claimed] = await db
+    .update(passwordResetTokens)
+    .set({ usedAt: now })
+    .where(
+      and(eq(passwordResetTokens.id, reset.id), isNull(passwordResetTokens.usedAt))
+    )
+    .returning({ id: passwordResetTokens.id });
+  if (!claimed)
+    throw new AuthError(
+      "This password reset link is invalid or expired.",
+      400,
+      "RESET_TOKEN_INVALID"
+    );
+
   const passwordHash = await hashPassword(password);
   await db
     .update(users)
     .set({ passwordHash, loginMethod: "local", updatedAt: now })
     .where(eq(users.id, reset.userId));
-  await db
-    .update(passwordResetTokens)
-    .set({ usedAt: now })
-    .where(eq(passwordResetTokens.id, reset.id));
-  await db.delete(authSessions).where(eq(authSessions.userId, reset.userId));
+  await revokeAllSessionsForUser(reset.userId);
   const user = await getUserById(reset.userId);
   if (!user) throw new AuthError("Account not found", 404, "ACCOUNT_NOT_FOUND");
   const sessionToken = await createSession(user.id);

@@ -2,9 +2,9 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { auditLogs, authSessions, organizations, platformStaff, users } from "../drizzle/schema";
-import { createImpersonationSession, endImpersonationSession, IMPERSONATION_TTL_MS, sessionTokenFromRequest } from "./_core/localAuth";
+import { createImpersonationSession, endImpersonationSession, IMPERSONATION_TTL_MS, revokeImpersonationSessionsBy, sessionTokenFromRequest } from "./_core/localAuth";
 import { platformProcedure, protectedProcedure, router, superadminProcedure } from "./_core/trpc";
-import { getDb, getUserByEmail, getUserById } from "./db";
+import { getDb, getPlatformStaffByUserId, getUserByEmail, getUserById } from "./db";
 import { billingAccess } from "./billing/access";
 import { isBillingEnabled } from "./_core/env";
 
@@ -55,6 +55,11 @@ const impersonationRouter = router({
       const targetUser = await getUserById(input.userId);
       if (!targetUser || !targetUser.organizationId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "That user does not belong to an organization." });
+      }
+      // Impersonation is for seeing a shop user's view, never for borrowing
+      // another operator's (or your own) platform access.
+      if (targetUser.id === ctx.user.id || (await getPlatformStaffByUserId(targetUser.id))) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Platform staff accounts cannot be impersonated." });
       }
 
       const token = await createImpersonationSession(targetUser.id, ctx.user.id);
@@ -262,6 +267,7 @@ const staffRouter = router({
         .where(eq(platformStaff.userId, input.userId))
         .returning();
       if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "That user is not platform staff." });
+      await revokeImpersonationSessionsBy(input.userId);
 
       return { ok: true } as const;
     }),

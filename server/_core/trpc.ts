@@ -114,6 +114,13 @@ const requirePlatformStaff = t.middleware(async opts => {
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
   }
+  // An impersonation session acts as the target *shop* user only. Without
+  // this, impersonating someone who is also platform staff would hand the
+  // session their operator powers (including starting new impersonations
+  // attributed to them).
+  if (ctx.impersonation) {
+    throw new TRPCError({ code: "FORBIDDEN", message: NOT_PLATFORM_STAFF_ERR_MSG });
+  }
   const staff = await getPlatformStaffByUserId(ctx.user.id);
   if (!staff) {
     throw new TRPCError({ code: "FORBIDDEN", message: NOT_PLATFORM_STAFF_ERR_MSG });

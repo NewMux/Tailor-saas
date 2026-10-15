@@ -53,7 +53,7 @@ import { orgScope } from "../_core/tenantDb";
 import { sendEmail } from "../_core/email";
 import { staffInviteEmail } from "../_core/emailTemplates";
 import { appBaseUrl } from "../_core/urls";
-import { hashOpaqueToken, randomToken } from "../_core/localAuth";
+import { hashOpaqueToken, randomToken, revokeAllSessionsForUser } from "../_core/localAuth";
 import {
   INVITE_TTL_MS,
   adminRoles,
@@ -222,6 +222,8 @@ export const teamRouter = router({
             and(eq(users.id, input.userId), orgScope(users, ctx.organizationId))
           );
       });
+      // Their open sessions would otherwise linger until they expire.
+      await revokeAllSessionsForUser(input.userId);
       await audit(
         ctx.user.id,
         ctx.organizationId,
@@ -442,6 +444,18 @@ export const teamRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "User not found in your organization.",
+        });
+      // Same protection removeUser gives owners: another admin (or the owner
+      // by mistake) must not be able to demote or deactivate the owner and
+      // lock them out of their own shop.
+      const organization = await getOrganizationById(ctx.organizationId);
+      if (
+        organization?.ownerId === input.userId &&
+        (input.role !== "admin" || !input.isActive)
+      )
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "The shop owner must stay an active admin.",
         });
       await db
         .insert(userBusinessRoles)

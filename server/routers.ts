@@ -20,9 +20,19 @@ const authRouter = router({
       getPlatformStaffByUserId(ctx.user.id),
       ctx.impersonation ? getUserById(ctx.impersonation.platformStaffUserId) : undefined,
     ]);
+    // Explicit allow-list: the users row also holds passwordHash and openId,
+    // which must never reach the browser.
     return {
-      ...ctx.user,
-      isPlatformStaff: Boolean(platformStaffRow),
+      id: ctx.user.id,
+      name: ctx.user.name,
+      email: ctx.user.email,
+      role: ctx.user.role,
+      organizationId: ctx.user.organizationId,
+      loginMethod: ctx.user.loginMethod,
+      lastSignedIn: ctx.user.lastSignedIn,
+      // An impersonation session never carries the target's operator access
+      // (see requirePlatformStaff), so don't advertise it either.
+      isPlatformStaff: Boolean(platformStaffRow) && !ctx.impersonation,
       impersonation: ctx.impersonation ? { by: impersonator?.name || impersonator?.email || "platform staff" } : null,
     };
   }),

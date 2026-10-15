@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { notifyOwner } from "./notification";
-import { globalUserAdminProcedure, publicProcedure, router } from "./trpc";
+import { platformProcedure, publicProcedure, router } from "./trpc";
 
 export const systemRouter = router({
   health: publicProcedure
@@ -13,7 +13,10 @@ export const systemRouter = router({
       ok: true,
     })),
 
-  notifyOwner: globalUserAdminProcedure
+  // Platform staff only: every shop owner carries the legacy users.role
+  // "admin" flag, so globalUserAdminProcedure would let any tenant message
+  // the platform operator.
+  notifyOwner: platformProcedure
     .input(
       z.object({
         title: z.string().min(1, "title is required"),
