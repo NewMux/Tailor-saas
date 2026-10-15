@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { legalConfig } from "@/pages/public/legalConfig";
+import { COMPANY_NAME, COMPANY_URL, MARKETING_SITE_URL, PRODUCT_NAME } from "@shared/const";
 
 type AuthGateProps = {
   callbackError?: string | null;
@@ -249,11 +250,16 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
           )}
         </div>}
         <nav className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-1 border-t pt-4 text-xs text-muted-foreground" aria-label="Legal">
+          <a href={MARKETING_SITE_URL} className="hover:underline">Home</a>
           <Link href="/pricing" className="hover:underline">Pricing</Link>
           <Link href="/terms" className="hover:underline">Terms</Link>
           <Link href="/privacy" className="hover:underline">Privacy</Link>
           <Link href="/refunds" className="hover:underline">Refunds</Link>
         </nav>
+        <p className="mt-3 text-center text-[11px] text-muted-foreground" data-no-translate>
+          {PRODUCT_NAME}, powered by{" "}
+          <a href={COMPANY_URL} target="_blank" rel="noopener" className="font-medium hover:underline">{COMPANY_NAME}</a>
+        </p>
       </div>
     </main>
   );

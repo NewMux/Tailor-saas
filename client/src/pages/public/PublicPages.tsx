@@ -1,6 +1,6 @@
 import { Check, Scissors } from "lucide-react";
 import { Link, Route, Switch } from "wouter";
-import { PRODUCT_NAME } from "@shared/const";
+import { COMPANY_NAME, COMPANY_URL, MARKETING_SITE_URL, PRODUCT_NAME } from "@shared/const";
 import { trpc } from "@/lib/trpc";
 import { formatPlanPrice } from "@/lib/formatPlanPrice";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -14,7 +14,7 @@ function PublicShell({ children }: { children: React.ReactNode }) {
   return <div className="min-h-[100dvh] bg-stone-50">
     <header className="border-b bg-white">
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-4">
-        <Link href="/pricing" className="flex items-center gap-2 font-semibold"><Scissors className="h-5 w-5 text-primary" />{PRODUCT_NAME}</Link>
+        <a href={MARKETING_SITE_URL} className="flex items-center gap-2 font-semibold"><Scissors className="h-5 w-5 text-primary" /><span className="leading-tight">{PRODUCT_NAME}<span className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" data-no-translate>powered by {COMPANY_NAME}</span></span></a>
         <div className="flex items-center gap-2">
           <Button data-no-translate variant="ghost" size="sm" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
           <Link href="/" className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground">Sign in</Link>
@@ -28,7 +28,7 @@ function PublicShell({ children }: { children: React.ReactNode }) {
         <Link href="/terms" className="hover:underline">Terms of service</Link>
         <Link href="/privacy" className="hover:underline">Privacy policy</Link>
         <Link href="/refunds" className="hover:underline">Refund policy</Link>
-        <span className="ml-auto" data-no-translate>© {new Date().getFullYear()} {legalConfig.legalBusinessName}</span>
+        <span className="ml-auto" data-no-translate>© {new Date().getFullYear()} {PRODUCT_NAME}, powered by <a href={COMPANY_URL} target="_blank" rel="noopener" className="font-medium hover:underline">{COMPANY_NAME}</a></span>
       </div>
     </footer>
   </div>;
