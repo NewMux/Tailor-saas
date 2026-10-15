@@ -17,7 +17,9 @@ function authLimiter(limit: number, options: { skipSuccessfulRequests?: boolean 
 /**
  * Per-IP throttling for the unauthenticated auth endpoints. Relies on
  * `trust proxy` (set in createApp) so req.ip is the real client address
- * behind Railway's proxy rather than the proxy itself.
+ * behind Vercel's proxy rather than the proxy itself. On Vercel the counters
+ * live in each function instance's memory, so the limits are per instance:
+ * a brake on brute force, not an exact quota.
  *
  * Login and reset only count failed attempts, so a busy shop with many
  * staff signing in from one IP never gets locked out by successful logins.

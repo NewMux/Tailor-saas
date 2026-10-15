@@ -38,7 +38,11 @@ const tenantGuardEnabled = process.env.NODE_ENV === "test" || process.env.TENANT
 
 export async function getDb() {
   if (!database && ENV.databaseUrl) {
-    client = postgres(ENV.databaseUrl, { prepare: false });
+    // On Vercel each function instance holds its own pool, and many instances
+    // can run at once, so keep pools small and release idle connections; the
+    // Supabase transaction pooler multiplexes them onto real connections.
+    // prepare: false is required by that pooler.
+    client = postgres(ENV.databaseUrl, process.env.VERCEL ? { prepare: false, max: 3, idle_timeout: 20 } : { prepare: false });
     database = tenantGuardEnabled ? drizzle(client, { logger: new TenantGuardLogger() }) : drizzle(client);
   }
   return database;

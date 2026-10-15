@@ -1,6 +1,6 @@
-# Deployment and launch guide (Railway + Supabase)
+# Deployment and launch guide (Vercel + Supabase)
 
-This guide takes the app from a fresh Railway project to a paid, self-serve
+This guide takes the app from a fresh Vercel project to a paid, self-serve
 SaaS: sign-up with a free trial, subscriptions through Paddle, transactional
 email through Resend, and Supabase as the backend for the Postgres database
 and private file storage.
@@ -11,26 +11,33 @@ email, storage and billing one at a time.
 
 ## Architecture
 
-One Express/tRPC process serves both the built React frontend and the `/api/*`
-backend from a single origin — there is no separate frontend host. Railway
-runs the repo's existing `Dockerfile` directly (configured by `railway.json`).
-Supabase is the backend: its managed Postgres holds all data, and Supabase
-Storage holds staff documents through its S3-compatible API.
+Vercel serves everything from one domain. The built React app is static
+files on Vercel's CDN, and the Express/tRPC backend runs as a single
+serverless function that handles `/api/*` and `/manus-storage/*`. Any other
+path falls back to `index.html` for client-side routing. Supabase is the
+backend: its managed Postgres holds all data, and Supabase Storage holds
+staff documents through its S3-compatible API.
 
 ```text
-Browser ──► https://app.yourdomain.com ──► Railway (HTTPS, routing)
-                                               │
-                                               └── app service (Dockerfile)
-                                                     ├── React frontend + /api/*
+Browser ──► https://app.yourdomain.com ──► Vercel (HTTPS, CDN, routing)
+                                               ├── static React app
+                                               └── "api" function (Express, Tokyo hnd1)
                                                      ├──► Supabase Postgres (all data)
                                                      ├──► Supabase Storage  (staff documents)
                                                      ├──► Resend   (emails)
                                                      └──◄► Paddle  (checkout + webhooks)
 ```
 
+`vercel.json` runs `pnpm run build:vercel` (`scripts/build-vercel.ts`), which
+writes Vercel's Build Output API layout directly: the static site, the
+Express app bundled into one self-contained file
+(`server/_core/vercel.ts`), and the routing table. Nothing is left to
+framework auto-detection. The function runs in Tokyo (`hnd1`), next to the
+Supabase project; set `VERCEL_FUNCTION_REGION` to change that.
+
 The app uses Supabase as a database and file store only. Sign-in stays the
 app's own email/password auth, and the browser never talks to Supabase
-directly: every request goes through the Express server, which enforces
+directly: every request goes through the Express function, which enforces
 tenant isolation and roles. Row-level security is turned on for every table
 with no policies (migration `0015_enable_rls`), so Supabase's public Data API
 cannot read or write anything even with the project's anon key, while the
@@ -40,11 +47,17 @@ The browser sends an opaque session token in the `Authorization` header (and
 an HttpOnly cookie); it's hashed before storage. Passwords are stored as
 salted scrypt hashes.
 
+### Serverless limits to know
+
+- **Request size:** Vercel rejects request bodies over 4.5 MB, so staff documents are capped at 3 MB each (they're sent base64-encoded).
+- **Request time:** each request may run up to 30 seconds (`maxDuration` in the build script).
+- **Rate limiting** of login, sign-up and password-reset attempts is kept in each function instance's memory, so it's a per-instance brake on brute force rather than an exact global quota.
+
 ## Monthly cost at launch
 
 | Piece | Provider | Cost |
 |---|---|---|
-| App | Railway Hobby | ~$5 |
+| App hosting | Vercel Pro (Hobby is non-commercial only) | $20 per member |
 | Postgres + file storage | Supabase Free (testing) / Pro (production) | $0 / $25 |
 | Email | Resend free tier (3,000/month) | $0 |
 | Billing | Paddle | no monthly fee; a % of each payment |
@@ -52,7 +65,8 @@ salted scrypt hashes.
 | Domain | any registrar | ~$1 |
 
 Check current prices on each provider's site. All shops share one app and
-one database, so this cost does not grow per customer.
+one database, so this cost does not grow per customer until usage passes the
+plans' included amounts.
 
 Use Supabase Pro for production: Free projects pause after a week without
 activity and have no daily backups.
@@ -61,78 +75,91 @@ activity and have no daily backups.
 
 The production project is **Tafsell** (ref `phbiaqtxqwqzouqsexbj`, region
 `ap-northeast-1`) in the NewMux Ventures organization. Its schema is already
-migrated through `0015_enable_rls`; the container's `drizzle-kit migrate`
-applies any later migrations on each deploy. For a new project, create one at
-[supabase.com/dashboard](https://supabase.com/dashboard) and the first deploy
-creates the whole schema.
+migrated through `0015_enable_rls`. For a new project, create one at
+[supabase.com/dashboard](https://supabase.com/dashboard); the first
+production deploy creates the whole schema.
 
-Get the connection string: project → **Connect** → **Session pooler** (port
-`5432`). Use the session pooler rather than the direct connection: the direct
-host is IPv6-only, while the pooler works over IPv4 from Railway, and session
-mode keeps full Postgres behavior for migrations. Add `sslmode=require`:
+The app needs two connection strings, both from project → **Connect**. Copy
+each host exactly as the dashboard shows it, add `sslmode=require`, and
+URL-encode the password if it contains URL-reserved characters (reset it
+under **Project Settings → Database** if you don't have it).
 
-```text
-postgresql://postgres.phbiaqtxqwqzouqsexbj:<db-password>@aws-<n>-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require
-```
+- **Transaction pooler** (port `6543`) for the running app, as `DATABASE_URL`. Serverless functions open many short-lived connections; the transaction pooler multiplexes them onto a few real ones. The app already disables prepared statements, which this pooler requires.
 
-Copy the host exactly as the dashboard shows it. URL-encode the password if
-it contains URL-reserved characters; reset it under **Project Settings →
-Database** if you don't have it.
+  ```text
+  postgresql://postgres.phbiaqtxqwqzouqsexbj:<db-password>@aws-<n>-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
+  ```
 
-## 2. Create the Railway project
+- **Session pooler** (port `5432`) for migrations, as `MIGRATION_DATABASE_URL`. Migrations need a real session. (The direct `db.<ref>.supabase.co` host is IPv6-only, so use the pooler.)
 
-1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → select this repository. Don't add a Railway Postgres database; Supabase is the database.
-2. On the app service → **Variables**, set `DATABASE_URL` to the Supabase session-pooler string from step 1.
+  ```text
+  postgresql://postgres.phbiaqtxqwqzouqsexbj:<db-password>@aws-<n>-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+  ```
 
-`railway.json` tells Railway to build the `Dockerfile` and to use
-`GET /api/health` as the health check. That endpoint queries Postgres, so a
-container with a broken database connection is restarted instead of looking
-healthy.
+## 2. Create the Vercel project
+
+1. [vercel.com/new](https://vercel.com/new) → import this GitHub repository. Leave **Framework Preset** as **Other** and the build, output and install settings at their defaults: `vercel.json` sets them.
+2. **Settings → General → Node.js Version**: 22.x.
+3. **Settings → Environment Variables**: add the variables below, scoped to **Production** only.
 
 ### Required environment variables
 
 ```dotenv
-DATABASE_URL=postgresql://postgres.<project-ref>:<db-password>@<pooler-host>:5432/postgres?sslmode=require
+DATABASE_URL=postgresql://postgres.<project-ref>:<db-password>@<pooler-host>:6543/postgres?sslmode=require
+MIGRATION_DATABASE_URL=postgresql://postgres.<project-ref>:<db-password>@<pooler-host>:5432/postgres?sslmode=require
 AUTH_BASE_URL=https://app.yourdomain.com
-NODE_ENV=production
+ENABLE_EXPERIMENTAL_COREPACK=1
 LOG_LEVEL=info
 ```
 
-- `AUTH_BASE_URL` is the public address used in reset, invite and welcome links. Use the `*.up.railway.app` domain until your custom domain is attached, then update it.
-- `PORT` is injected by Railway; the app binds exactly that port in production.
+- `AUTH_BASE_URL` is the public address used in reset, invite and welcome links. Use the `*.vercel.app` production domain until your custom domain is attached, then update it.
+- `ENABLE_EXPERIMENTAL_COREPACK=1` makes Vercel install with the exact pnpm version pinned in `package.json` (`packageManager`).
+- `NODE_ENV` and `PORT` are not needed: the build sets production mode and Vercel routes requests itself.
 - `ALLOWED_ORIGIN` is not needed for this single-origin setup.
 - `SENTRY_DSN` is optional; leave it unset to run without error monitoring.
 
-The app validates its configuration at startup and refuses to start with a
-clear message if something is wrong, for example only half of an
-integration's variables set.
+**Keep the database variables out of Preview.** Every pull request gets a
+preview deployment, and with production credentials it would read and write
+live shop data. Without them, previews still build (they skip migrations) but
+their API calls fail. To get working previews, point Preview-scoped variables
+at a separate Supabase project or branch.
+
+Production builds check the configuration and stop with a clear message if
+something is wrong, for example a missing `AUTH_BASE_URL` or only half of an
+integration's variables set, so a broken configuration never goes live.
 
 ## 3. Domain and HTTPS
 
-Railway gives every service a free `*.up.railway.app` subdomain with HTTPS.
-For your own domain: app service → **Settings → Networking → Custom Domain**,
-add e.g. `app.yourdomain.com`, and create the CNAME record it shows at your
-DNS provider. Railway issues and renews the certificate. Then set
-`AUTH_BASE_URL` to the new domain.
+Vercel gives every project a `*.vercel.app` domain with HTTPS. For your own
+domain: **Settings → Domains** → add e.g. `app.yourdomain.com` and create the
+DNS record Vercel shows at your DNS provider. Vercel issues and renews the
+certificate. Then set `AUTH_BASE_URL` to the new domain and redeploy.
 
 ## 4. Deploy
 
-Pushing to `main` deploys automatically. The container runs migrations before
-starting the server:
+Pushing to `main` deploys to production automatically; other branches get
+preview deployments. A production build:
 
-```text
-./node_modules/.bin/drizzle-kit migrate && exec node dist/index.js
-```
+1. validates the environment variables;
+2. applies pending database migrations through `MIGRATION_DATABASE_URL` (`drizzle-kit migrate`);
+3. builds the frontend and bundles the API function.
 
-Against the Tafsell Supabase project this is a no-op until a new migration
-is added: its schema is already at `0015_enable_rls`. Every new table a
-migration creates must also `ENABLE ROW LEVEL SECURITY`; `server/rls.test.ts`
-fails CI if one doesn't.
+If any step fails, the deployment fails and the previous one keeps serving.
+Against the Tafsell Supabase project the migration step is a no-op until a
+new migration is added: its schema is already at `0015_enable_rls`. Every new
+table a migration creates must also `ENABLE ROW LEVEL SECURITY`;
+`server/rls.test.ts` fails CI if one doesn't.
 
-On each deploy Railway sends SIGTERM to the old container. The server stops
-accepting connections, lets in-flight requests finish (up to 10 seconds), and
-closes the database pool. To roll back, redeploy a previous successful
-deployment from the **Deployments** tab.
+Because migrations run before the new code goes live, write them so the
+currently deployed code keeps working (add columns before using them, drop
+them a release later).
+
+To roll back, open **Deployments**, pick a previous production deployment
+and choose **Instant Rollback**. Rolling back code does not roll back the
+database.
+
+After a deploy, `https://<domain>/api/health` should return `{"ok":true}`; it
+round-trips to Postgres.
 
 ## 5. Transactional email (Resend)
 
@@ -142,7 +169,7 @@ owners must copy invite links by hand. Set it up before inviting real shops.
 1. Create an account at [resend.com](https://resend.com) → **Domains** → **Add domain** (use a subdomain such as `mail.yourdomain.com` if you like).
 2. Add the DNS records Resend shows (SPF, DKIM) and wait for the domain to show **Verified**.
 3. **API Keys** → create a key with **Sending access**.
-4. Set on Railway:
+4. Set in Vercel (Production):
 
 ```dotenv
 RESEND_API_KEY=re_...
@@ -159,8 +186,8 @@ permission check and a signed link that expires after 5 minutes. The app
 talks to Supabase Storage through its S3-compatible API.
 
 1. The private bucket `staff-documents` (10 MB per file) already exists in the Tafsell project. For a new project: **Storage → New bucket**, name `staff-documents`, leave **Public bucket** off.
-2. **Project Settings → Storage → S3 access keys → New access key**. Copy the access key ID and secret. They bypass RLS and can reach every bucket, so they belong only in Railway's variables.
-3. Set on Railway:
+2. **Project Settings → Storage → S3 access keys → New access key**. Copy the access key ID and secret. They bypass RLS and can reach every bucket, so they belong only in Vercel's server-side variables (never in a `VITE_` variable).
+3. Set in Vercel (Production):
 
 ```dotenv
 S3_ENDPOINT=https://phbiaqtxqwqzouqsexbj.storage.supabase.co/storage/v1/s3
@@ -197,7 +224,7 @@ subscription status, which Paddle pushes to it by webhook.
    - Events: `subscription.created`, `subscription.updated`, `subscription.activated`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`
    - Save, then copy the destination's **secret key** (`pdl_ntfset_...`).
 5. **Checkout → Checkout settings** → set the **default payment link** to your app URL, and add your domain under approved domains.
-6. Set on Railway:
+6. Set in Vercel (Production):
 
 ```dotenv
 PADDLE_ENV=sandbox
@@ -215,7 +242,7 @@ TRIAL_DAYS=14
 1. Fill in your legal details in `client/src/pages/public/legalConfig.ts` (business name, address, support email, jurisdiction, date). Review the Terms, Privacy and Refund pages at `/terms`, `/privacy` and `/refunds`; they are templates, not legal advice. Deploy.
 2. Create a live account at [vendors.paddle.com](https://vendors.paddle.com) and complete verification. Paddle reviews your website: it needs to see `/pricing`, `/terms`, `/privacy` and `/refunds` on your domain, all public and all linked from the sign-in page.
 3. Repeat steps 2–5 of 7a in the live dashboard (live IDs and keys differ from sandbox).
-4. Switch the Railway variables to the live values and set `PADDLE_ENV=production`.
+4. Switch the Vercel variables to the live values, set `PADDLE_ENV=production`, and redeploy.
 
 If the Paddle variables are removed, billing switches off completely: nobody
 is restricted and the Billing page and banners disappear.
@@ -229,7 +256,7 @@ is restricted and the Billing page and banners disappear.
 | Email | "Forgot password?" delivers a working reset link. |
 | Staff invite | Owner Settings → Invite staff emails the invite; accepting with the invited email works, and a different email is refused. |
 | Tenant isolation | With two organizations, neither sees the other's customers, sales, inventory or staff. |
-| Documents | Uploading and opening a staff document works (Staff & Payroll). |
+| Documents | Uploading and opening a staff document works (Staff & Payroll), and a file over 3 MB is refused with a clear message. |
 | Billing | Sandbox checkout activates the shop; an expired trial makes it read-only; the ops console can exempt it. |
 | Public pages | `/pricing`, `/terms`, `/privacy`, `/refunds` load while signed out and show your real business details. |
 | Persistence | Create a customer, redeploy, and confirm it's still there. |
@@ -273,16 +300,16 @@ password resets.
 ## Security notes
 
 - Login, sign-up, forgot-password and reset endpoints are rate-limited per IP.
-- The app trusts exactly one proxy hop (Railway's), so client IPs and HTTPS detection are correct.
+- The app trusts exactly one proxy hop (Vercel's, which overwrites `X-Forwarded-For` with the client address), so client IPs and HTTPS detection are correct.
 - Paddle webhooks are verified against `PADDLE_WEBHOOK_SECRET` over the raw request body, and replays older than 5 minutes are rejected. A subscription can only be linked to a shop through checkout data signed by the server.
 - Invite links only work for the email address they were sent to.
-- The container runs as an unprivileged user.
 
 ## Local development
 
 `docker-compose.yml` is for local development only (it starts a plain Postgres
-and the app together); Railway builds the `Dockerfile` directly and doesn't
-use it. Plain Postgres behaves the same as Supabase for this app, and CI runs
+and the app together). Vercel doesn't use it or the `Dockerfile`; both remain
+for local development and for self-hosting on any container platform. Plain
+Postgres behaves the same as Supabase for this app, and CI runs
 against it too. Don't point local development or tests at the production
 Supabase database: the test suite writes rows.
 

@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { MAX_STAFF_DOCUMENT_BASE64_LENGTH } from "@shared/const";
 import {
   auditLogs,
   attendance,
@@ -146,7 +147,7 @@ export const staffRouter = router({
             label: z.string().trim().min(2).max(120),
             fileName: z.string().trim().min(1).max(255),
             contentType: z.string().trim().min(1).max(120),
-            dataBase64: z.string().min(1).max(5000000),
+            dataBase64: z.string().min(1).max(MAX_STAFF_DOCUMENT_BASE64_LENGTH, "Documents must be 3 MB or smaller."),
           })
           .superRefine((value, ctx) => {
             const extension = value.fileName

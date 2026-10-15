@@ -5,3 +5,8 @@ export const NOT_PLATFORM_STAFF_ERR_MSG = 'You do not have platform operator acc
 export const BILLING_READ_ONLY_ERR_MSG = "Your shop is in read-only mode until a subscription is active. Visit Billing to continue. (10005)";
 /** Product name used in server-generated copy such as emails. */
 export const PRODUCT_NAME = "Tafsell";
+
+// Staff documents are sent base64-encoded in one API request, and Vercel
+// rejects request bodies over 4.5 MB: 3 MB of file is ~4 MB once encoded.
+export const MAX_STAFF_DOCUMENT_BYTES = 3 * 1024 * 1024;
+export const MAX_STAFF_DOCUMENT_BASE64_LENGTH = Math.ceil(MAX_STAFF_DOCUMENT_BYTES / 3) * 4;

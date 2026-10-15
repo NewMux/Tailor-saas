@@ -117,3 +117,6 @@ client/public/__manus__/version.json
 /test-results/
 /playwright-report/
 /blob-report/
+
+# Vercel build output and local project link
+.vercel/

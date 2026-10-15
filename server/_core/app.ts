@@ -44,9 +44,10 @@ function registerCors(app: Express) {
 export function createApp(): Express {
   const app = express();
   app.disable("x-powered-by");
-  // Railway (and most PaaS hosts) terminate TLS at one proxy hop in front of
-  // the container. Trusting exactly one hop makes req.ip / req.secure reflect
-  // the real client, which rate limiting and HSTS depend on.
+  // Vercel (and most PaaS hosts) terminate TLS at one proxy hop in front of
+  // the app; Vercel overwrites X-Forwarded-For with the client address.
+  // Trusting exactly one hop makes req.ip / req.secure reflect the real
+  // client, which rate limiting and HSTS depend on.
   app.set("trust proxy", 1);
   app.use(pinoHttp({ logger, autoLogging: { ignore: req => req.url === "/api/auth/session" || req.url === "/api/health" } }));
   app.use((req, res, next) => {
