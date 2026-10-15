@@ -86,25 +86,30 @@ export function staffInviteEmail(to: string, input: { inviteeName: string; shopN
   return { to, subject: `You're invited to join ${input.shopName} on ${PRODUCT_NAME}`, html, text };
 }
 
-export function welcomeEmail(to: string, input: { name: string; shopName: string; appUrl: string; trialEndsAt: Date | null }): EmailMessage {
+export function shopSetupEmail(
+  to: string,
+  input: { name: string; shopName: string; setupUrl: string; trialEndsAt: Date | null }
+): EmailMessage {
   const trialDate = input.trialEndsAt?.toISOString().slice(0, 10);
   const { html, text } = layout(
     {
       heading: `Welcome to ${PRODUCT_NAME}, ${input.name}`,
       body: [
-        `Your workspace for ${input.shopName} is ready.`,
+        `Your workspace for ${input.shopName} is ready. Choose a password to sign in. This link works once and expires in 7 days.`,
         ...(trialDate ? [`Your free trial runs until ${trialDate}. No card is needed until then.`] : []),
       ],
-      button: { label: "Open your workspace", url: input.appUrl },
+      button: { label: "Set your password", url: input.setupUrl },
+      footnote: "If the link has expired, use \"Forgot password?\" on the sign-in page with this email address.",
     },
     {
       heading: `مرحبًا بك في ${PRODUCT_NAME}`,
       body: [
-        `مساحة العمل الخاصة بـ ${input.shopName} جاهزة.`,
+        `مساحة العمل الخاصة بـ ${input.shopName} جاهزة. اختر كلمة مرور لتسجيل الدخول. هذا الرابط يعمل مرة واحدة وتنتهي صلاحيته خلال 7 أيام.`,
         ...(trialDate ? [`تستمر الفترة التجريبية المجانية حتى ${trialDate}. لا حاجة لبطاقة دفع حتى ذلك الحين.`] : []),
       ],
-      button: { label: "فتح مساحة العمل", url: input.appUrl },
+      button: { label: "تعيين كلمة المرور", url: input.setupUrl },
+      footnote: "إذا انتهت صلاحية الرابط، استخدم «نسيت كلمة المرور؟» في صفحة تسجيل الدخول بهذا البريد الإلكتروني.",
     }
   );
-  return { to, subject: `Welcome to ${PRODUCT_NAME}`, html, text };
+  return { to, subject: `Your ${PRODUCT_NAME} workspace for ${input.shopName} is ready`, html, text };
 }

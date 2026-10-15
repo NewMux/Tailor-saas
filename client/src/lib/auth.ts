@@ -65,12 +65,8 @@ export const authApi = {
     const response = await request<{ authenticated: boolean; user: AuthUser | null }>("/api/auth/session", { method: "GET" });
     return response.authenticated;
   },
-  async register(
-    input: { name: string; email: string; password: string } & (
-      | { mode: "create_org"; orgName: string }
-      | { mode: "join_invite"; inviteToken: string }
-    )
-  ) {
+  /** Accepts a staff invite. New shops are created by platform staff, not here. */
+  async register(input: { name: string; email: string; password: string; mode: "join_invite"; inviteToken: string }) {
     return remember(await request<AuthResponse>("/api/auth/register", { method: "POST", body: JSON.stringify(input) }));
   },
   async login(email: string, password: string) {

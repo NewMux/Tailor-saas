@@ -14,10 +14,10 @@ import {
   users,
   type User,
 } from "../../drizzle/schema";
-import { acceptInviteAndCreateUser, createOrganizationWithOwner, getActiveInviteByTokenHash, getDb, getOrganizationById, getPlatformStaffByUserId, getUserByEmail, getUserById } from "../db";
-import { ENV, isBillingEnabled, isEmailConfigured } from "./env";
+import { acceptInviteAndCreateUser, getActiveInviteByTokenHash, getDb, getOrganizationById, getPlatformStaffByUserId, getUserByEmail, getUserById } from "../db";
+import { ENV, isEmailConfigured } from "./env";
 import { sendEmail } from "./email";
-import { passwordResetEmail, welcomeEmail } from "./emailTemplates";
+import { passwordResetEmail } from "./emailTemplates";
 import { logger } from "./logger";
 import { appBaseUrl } from "./urls";
 import { captureError } from "./sentry";
@@ -26,6 +26,9 @@ const scrypt = promisify(scryptCallback);
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const IMPERSONATION_TTL_MS = 60 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
+// A new shop owner's "set your password" link: longer than a reset link,
+// since it's handed over by email or by hand and may not be opened at once.
+export const ACCOUNT_SETUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_COOKIE = "erp_session";
 
 export class AuthError extends Error {
@@ -232,7 +235,7 @@ export async function getUserForRequest(
   return { user, impersonatedBy: session.impersonatedBy };
 }
 
-async function createResetToken(userId: number) {
+async function createResetToken(userId: number, ttlMs = RESET_TTL_MS) {
   const db = await getDb();
   if (!db)
     throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
@@ -244,13 +247,22 @@ async function createResetToken(userId: number) {
   await db.insert(passwordResetTokens).values({
     tokenHash: hashOpaqueToken(rawToken),
     userId,
-    expiresAt: new Date(now.getTime() + RESET_TTL_MS),
+    expiresAt: new Date(now.getTime() + ttlMs),
   });
   return rawToken;
 }
 
-function resetUrl(req: Request, token: string) {
-  return `${appBaseUrl(req)}/?reset_token=${encodeURIComponent(token)}`;
+function resetUrl(baseUrl: string, token: string) {
+  return `${baseUrl}/?reset_token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * One-time link for a new shop owner (created by platform staff, with no
+ * password yet) to choose their password. It is a password-reset token with
+ * a longer lifetime, so it is redeemed by the normal /api/auth/reset flow.
+ */
+export async function createAccountSetupLink(userId: number, baseUrl: string) {
+  return resetUrl(baseUrl, await createResetToken(userId, ACCOUNT_SETUP_TTL_MS));
 }
 
 async function register(req: Request, res: Response) {
@@ -259,7 +271,15 @@ async function register(req: Request, res: Response) {
     typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
   const password =
     typeof req.body?.password === "string" ? req.body.password : "";
-  const mode = req.body?.mode === "join_invite" ? "join_invite" : "create_org";
+  // Invite-only: new shops are created by platform staff (admin.ts
+  // organizations.create), so the only self-service registration left is a
+  // staff member accepting their shop's invite.
+  if (req.body?.mode !== "join_invite")
+    throw new AuthError(
+      "New shops are set up by our team. Contact us to get an account.",
+      403,
+      "SIGNUP_DISABLED"
+    );
   if (name.length < 2 || name.length > 160)
     throw new AuthError("Enter a valid full name.");
   if (!email || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email))
@@ -288,48 +308,35 @@ async function register(req: Request, res: Response) {
 
   let user: User;
   try {
-    if (mode === "join_invite") {
-      const inviteToken =
-        typeof req.body?.inviteToken === "string"
-          ? req.body.inviteToken.trim()
-          : "";
-      if (!inviteToken)
-        throw new AuthError("An invite link is required to join a shop.");
-      const invite = await getActiveInviteByTokenHash(
-        hashOpaqueToken(inviteToken)
+    const inviteToken =
+      typeof req.body?.inviteToken === "string"
+        ? req.body.inviteToken.trim()
+        : "";
+    if (!inviteToken)
+      throw new AuthError(
+        "An invite link is required to join a shop.",
+        400,
+        "INVITE_REQUIRED"
       );
-      if (!invite)
-        throw new AuthError(
-          "This invite link is invalid or has expired.",
-          400,
-          "INVITE_INVALID"
-        );
-      // The invite is addressed to one person: without this check anyone
-      // who got hold of the link could join the shop under any address.
-      if (normalizeEmail(invite.email) !== email)
-        throw new AuthError(
-          "Use the email address this invite was sent to.",
-          400,
-          "INVITE_EMAIL_MISMATCH"
-        );
-      const result = await acceptInviteAndCreateUser(invite.id, newUser);
-      user = result.user;
-    } else {
-      const orgName =
-        typeof req.body?.orgName === "string" ? req.body.orgName.trim() : "";
-      if (orgName.length < 2 || orgName.length > 160)
-        throw new AuthError("Enter your shop or business name.");
-      const result = await createOrganizationWithOwner(orgName, newUser);
-      user = result.user;
-      void sendEmail(
-        welcomeEmail(email, {
-          name,
-          shopName: result.organization.name,
-          appUrl: appBaseUrl(req) || "/",
-          trialEndsAt: isBillingEnabled() ? result.organization.trialEndsAt : null,
-        })
+    const invite = await getActiveInviteByTokenHash(
+      hashOpaqueToken(inviteToken)
+    );
+    if (!invite)
+      throw new AuthError(
+        "This invite link is invalid or has expired.",
+        400,
+        "INVITE_INVALID"
       );
-    }
+    // The invite is addressed to one person: without this check anyone
+    // who got hold of the link could join the shop under any address.
+    if (normalizeEmail(invite.email) !== email)
+      throw new AuthError(
+        "Use the email address this invite was sent to.",
+        400,
+        "INVITE_EMAIL_MISMATCH"
+      );
+    const result = await acceptInviteAndCreateUser(invite.id, newUser);
+    user = result.user;
   } catch (error) {
     if (error instanceof AuthError) throw error;
     throw new AuthError(
@@ -357,7 +364,7 @@ async function login(req: Request, res: Response) {
   if (!user || !user.passwordHash || !passwordMatches) {
     if (user && !user.passwordHash) {
       throw new AuthError(
-        "This account needs a password reset before it can sign in.",
+        "This account has no password yet. Use the setup link you were sent, or \"Forgot password?\".",
         401,
         "PASSWORD_RESET_REQUIRED"
       );
@@ -390,7 +397,7 @@ async function forgotPassword(req: Request, res: Response) {
   let resetUrlValue: string | undefined;
   if (user?.email) {
     const token = await createResetToken(user.id);
-    resetUrlValue = resetUrl(req, token);
+    resetUrlValue = resetUrl(appBaseUrl(req), token);
     const { sent } = await sendEmail(passwordResetEmail(user.email, resetUrlValue));
     if (sent) {
       logger.info({ email }, "Password reset email sent");

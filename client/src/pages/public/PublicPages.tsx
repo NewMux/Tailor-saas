@@ -56,7 +56,7 @@ function Pricing() {
       {price ? <p className="mt-3"><span className="numeric text-4xl font-semibold" data-no-translate>{price.amount}</span> <span className="text-muted-foreground">per {price.period}</span></p> : <p className="mt-3 text-muted-foreground">Contact us for pricing.</p>}
       {plan.data?.billingEnabled && plan.data.trialDays > 0 && <p className="mt-2 text-sm text-emerald-700">{`${plan.data.trialDays}-day free trial, no card required`}</p>}
       <ul className="mt-6 space-y-2 text-sm">{features.map(feature => <li key={feature} className="flex gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />{feature}</li>)}</ul>
-      <Link href="/" className="mt-6 block rounded-lg bg-primary px-4 py-3 text-center font-semibold text-primary-foreground">Create your shop</Link>
+      <a href={`mailto:${legalConfig.supportEmail}`} className="mt-6 block rounded-lg bg-primary px-4 py-3 text-center font-semibold text-primary-foreground">Contact us to get started</a>
       <p className="mt-3 text-center text-xs text-muted-foreground">Prices exclude applicable taxes, which are calculated at checkout. Payments are processed by Paddle.com, our reseller and merchant of record.</p>
     </div>
   </div>;

@@ -13,8 +13,9 @@ just an ordinary organization, identified by a fixed, known owner email.
 
 ## One-time setup (only ever done once)
 
-Register the demo organization through the app's normal sign-up flow —
-"Create your shop" — using credentials the whole sales team can reuse:
+Create the demo organization like any other shop — `/ops` → **Create shop**
+(or `pnpm shop:create`) — then open its setup link and choose a password
+the whole sales team can reuse:
 
 - **Organization name**: e.g. "Tafsell Demo Tailors"
 - **Owner email**: a fixed address, e.g. `demo@yourcompany.example` — this

@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { SetupLinkNotice } from "./OrganizationsList";
 
 export default function OrganizationDetail() {
   const { id } = useParams<{ id: string }>();
@@ -32,6 +33,13 @@ export default function OrganizationDetail() {
   const [suspendReason, setSuspendReason] = useState("");
   const [impersonateReason, setImpersonateReason] = useState("");
   const [impersonatingUserId, setImpersonatingUserId] = useState<number | null>(null);
+  const ownerSetupLink = trpc.admin.organizations.ownerSetupLink.useMutation({
+    onSuccess: () => {
+      utils.admin.organizations.detail.invalidate({ organizationId });
+      toast.success("New setup link created");
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const suspend = trpc.admin.organizations.suspend.useMutation({
     onSuccess: () => {
@@ -173,12 +181,18 @@ export default function OrganizationDetail() {
 
       <div className="overflow-x-auto rounded-xl border bg-white">
         <div className="border-b px-4 py-3"><h2 className="text-sm font-semibold">Users</h2></div>
+        {ownerSetupLink.data && (
+          <div className="border-b bg-amber-50/50 p-4">
+            <SetupLinkNotice setupUrl={ownerSetupLink.data.setupUrl} emailed={false} />
+          </div>
+        )}
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Role</TableHead>
+              <TableHead>Account</TableHead>
               <TableHead>Last signed in</TableHead>
               <TableHead className="w-32" />
             </TableRow>
@@ -188,7 +202,27 @@ export default function OrganizationDetail() {
               <TableRow key={orgUser.id}>
                 <TableCell>{orgUser.name || "—"}</TableCell>
                 <TableCell>{orgUser.email}</TableCell>
-                <TableCell>{orgUser.role}</TableCell>
+                <TableCell>{orgUser.role}{orgUser.id === organization.ownerId ? " (owner)" : ""}</TableCell>
+                <TableCell>
+                  {orgUser.hasPassword ? (
+                    <Badge variant="secondary">Active</Badge>
+                  ) : (
+                    <div className="space-y-1">
+                      <Badge variant="outline">Setup pending</Badge>
+                      {orgUser.id === organization.ownerId && (
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="h-auto p-0 text-xs"
+                          disabled={ownerSetupLink.isPending}
+                          onClick={() => ownerSetupLink.mutate({ organizationId })}
+                        >
+                          New setup link
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </TableCell>
                 <TableCell>{orgUser.lastSignedIn ? new Date(orgUser.lastSignedIn).toLocaleString() : "—"}</TableCell>
                 <TableCell>
                   <AlertDialog open={impersonatingUserId === orgUser.id} onOpenChange={open => { setImpersonatingUserId(open ? orgUser.id : null); if (!open) setImpersonateReason(""); }}>

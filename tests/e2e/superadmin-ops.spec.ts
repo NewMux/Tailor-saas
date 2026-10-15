@@ -1,26 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { completeOwnerSetup, onboardShop } from "./helpers";
 
 const grantStaffScript = fileURLToPath(new URL("../../scripts/grant-platform-staff.mjs", import.meta.url));
 
 const stamp = Date.now();
 const staffOwner = { name: "Staffer Owner", orgName: `Ops Staff Shop ${stamp}`, email: `ops-staff-${stamp}@example.com`, password: "password123" };
 const targetOwner = { name: "Target Owner", orgName: `Ops Target Shop ${stamp}`, email: `ops-target-${stamp}@example.com`, password: "password123" };
-
-async function registerNewOrg(page: import("@playwright/test").Page, org: typeof staffOwner) {
-  await page.goto("/");
-  const needAccount = page.getByText("Need an account? Register");
-  await expect(needAccount).toBeVisible({ timeout: 15000 });
-  await needAccount.click();
-  await expect(page.getByText("Create your shop")).toBeVisible({ timeout: 15000 });
-  await page.locator("#name").fill(org.name);
-  await page.locator("#orgName").fill(org.orgName);
-  await page.locator("#email").fill(org.email);
-  await page.locator("#password").fill(org.password);
-  await page.locator('button[type=submit]').click();
-  await expect(page.getByText("Tailoring desk")).toBeVisible({ timeout: 15000 });
-}
 
 async function loginExisting(page: import("@playwright/test").Page, org: typeof staffOwner) {
   await page.goto("/");
@@ -35,15 +22,28 @@ async function loginExisting(page: import("@playwright/test").Page, org: typeof 
 }
 
 test.describe.serial("superadmin ops console", () => {
-  test("registers a staff owner and a target owner", async ({ page, browser }) => {
-    await registerNewOrg(page, staffOwner);
-    const targetPage = await browser.newPage();
-    await registerNewOrg(targetPage, targetOwner);
-    await targetPage.close();
+  test("onboards the staff owner and grants superadmin access via the bootstrap scripts", async ({ page }) => {
+    await onboardShop(page, staffOwner);
+    execFileSync("node", [grantStaffScript, "--email", staffOwner.email, "--role", "superadmin"], { env: process.env, stdio: "inherit" });
   });
 
-  test("grants the staff owner superadmin access via the bootstrap script", () => {
-    execFileSync("node", [grantStaffScript, "--email", staffOwner.email, "--role", "superadmin"], { env: process.env, stdio: "inherit" });
+  test("creates the target shop from the ops console, and its owner sets up their account", async ({ page, browser }) => {
+    await loginExisting(page, staffOwner);
+    await page.goto("/ops");
+    await page.getByRole("button", { name: "Create shop" }).click();
+    await page.locator("#shop-name").fill(targetOwner.orgName);
+    await page.locator("#owner-name").fill(targetOwner.name);
+    await page.locator("#owner-email").fill(targetOwner.email);
+    await page.getByRole("dialog").getByRole("button", { name: "Create shop" }).click();
+    await expect(page.getByRole("heading", { name: "Shop created" })).toBeVisible();
+    const setupLink = await page.getByRole("dialog").locator("input[readonly]").inputValue();
+    expect(setupLink).toContain("reset_token=");
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByText(targetOwner.orgName, { exact: true })).toBeVisible();
+
+    const targetPage = await browser.newPage();
+    await completeOwnerSetup(targetPage, setupLink, targetOwner.password);
+    await targetPage.close();
   });
 
   test("lists organizations and suspends the target org from the ops console", async ({ page }) => {

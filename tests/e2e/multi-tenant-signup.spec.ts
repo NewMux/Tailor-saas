@@ -1,25 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { onboardShop } from "./helpers";
 
 const stamp = Date.now();
 const orgOne = { name: "Owner One", orgName: `Shop One ${stamp}`, email: `owner1-${stamp}@example.com`, password: "password123" };
 const orgTwo = { name: "Owner Two", orgName: `Shop Two ${stamp}`, email: `owner2-${stamp}@example.com`, password: "password123" };
-
-async function registerNewOrg(page: import("@playwright/test").Page, org: typeof orgOne) {
-  await page.goto("/");
-  // Wait for the auth screen to finish loading before deciding whether to
-  // switch to the register form; counting immediately after goto() races
-  // the initial session check and can see neither form yet.
-  await expect(page.getByText("Sign in to Tafsell").or(page.getByText("Create your shop"))).toBeVisible();
-  const needAccount = page.getByText("Need an account? Register");
-  if (await needAccount.count()) await needAccount.click();
-  await expect(page.getByText("Create your shop")).toBeVisible();
-  await page.locator("#name").fill(org.name);
-  await page.locator("#orgName").fill(org.orgName);
-  await page.locator("#email").fill(org.email);
-  await page.locator("#password").fill(org.password);
-  await page.locator('button[type=submit]').click();
-  await expect(page.getByText("Tailoring desk")).toBeVisible({ timeout: 15000 });
-}
 
 async function loginExisting(page: import("@playwright/test").Page, org: typeof orgOne) {
   await page.goto("/");
@@ -30,9 +14,17 @@ async function loginExisting(page: import("@playwright/test").Page, org: typeof 
   await expect(page.getByText("Tailoring desk")).toBeVisible({ timeout: 15000 });
 }
 
-test.describe.serial("multi-tenant signup and isolation", () => {
-  test("registering with a shop name creates a new, empty organization", async ({ page }) => {
-    await registerNewOrg(page, orgOne);
+test.describe.serial("invite-only onboarding and isolation", () => {
+  test("the sign-in screen offers no public sign-up", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByText("Sign in to Tafsell")).toBeVisible();
+    await expect(page.getByText("Contact us")).toBeVisible();
+    await expect(page.getByText("Need an account? Register")).toHaveCount(0);
+    await expect(page.getByText("Create your shop")).toHaveCount(0);
+  });
+
+  test("a shop created for an owner starts as a new, empty organization", async ({ page }) => {
+    await onboardShop(page, orgOne);
     // A brand-new organization has zero sales/customers - proves this
     // dashboard isn't showing another tenant's seeded data.
     await expect(page.getByText("Registered clients")).toBeVisible();
@@ -54,8 +46,8 @@ test.describe.serial("multi-tenant signup and isolation", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("a second registration creates a fully separate organization", async ({ page }) => {
-    await registerNewOrg(page, orgTwo);
+  test("a second shop is a fully separate organization", async ({ page }) => {
+    await onboardShop(page, orgTwo);
     await expect(page.getByText("Tailoring desk")).toBeVisible({ timeout: 15000 });
 
     await page.goto("/settings");

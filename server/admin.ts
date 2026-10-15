@@ -2,13 +2,17 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { auditLogs, authSessions, organizations, platformStaff, users } from "../drizzle/schema";
-import { createImpersonationSession, endImpersonationSession, IMPERSONATION_TTL_MS, revokeImpersonationSessionsBy, sessionTokenFromRequest } from "./_core/localAuth";
+import { createAccountSetupLink, createImpersonationSession, endImpersonationSession, IMPERSONATION_TTL_MS, revokeImpersonationSessionsBy, sessionTokenFromRequest } from "./_core/localAuth";
+import { createShopWithOwner, ShopOnboardingError } from "./_core/shopOnboarding";
+import { appBaseUrl } from "./_core/urls";
 import { platformProcedure, protectedProcedure, router, superadminProcedure } from "./_core/trpc";
 import { getDb, getPlatformStaffByUserId, getUserByEmail, getUserById } from "./db";
 import { billingAccess } from "./billing/access";
 import { isBillingEnabled } from "./_core/env";
 
 const PLATFORM_AUDIT_ACTIONS = [
+  "ORG_CREATED",
+  "OWNER_SETUP_LINK_CREATED",
   "ORG_SUSPENDED",
   "ORG_REACTIVATED",
   "IMPERSONATION_STARTED",
@@ -128,7 +132,16 @@ const organizationsRouter = router({
 
       const [orgUsers, recentAuditLogs] = await Promise.all([
         db
-          .select({ id: users.id, name: users.name, email: users.email, role: users.role, createdAt: users.createdAt, lastSignedIn: users.lastSignedIn })
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            role: users.role,
+            createdAt: users.createdAt,
+            lastSignedIn: users.lastSignedIn,
+            // Whether they've finished account setup; never the hash itself.
+            hasPassword: sql<boolean>`${users.passwordHash} is not null`,
+          })
           .from(users)
           .where(eq(users.organizationId, input.organizationId))
           .orderBy(desc(users.createdAt)),
@@ -141,6 +154,51 @@ const organizationsRouter = router({
       ]);
 
       return { organization, users: orgUsers, recentAuditLogs, planStatus: planStatus(organization) };
+    }),
+
+  // Invite-only onboarding: the only way a new shop comes into existence.
+  // The owner gets a one-time link to choose their password; it's emailed
+  // when email is configured and always returned so staff can hand it over.
+  create: superadminProcedure
+    .input(
+      z.object({
+        shopName: z.string().trim().min(2).max(160),
+        ownerName: z.string().trim().min(2).max(160),
+        ownerEmail: z.string().trim().toLowerCase().email().max(320),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      let created: Awaited<ReturnType<typeof createShopWithOwner>>;
+      try {
+        created = await createShopWithOwner(input, appBaseUrl(ctx.req));
+      } catch (error) {
+        if (error instanceof ShopOnboardingError) throw new TRPCError({ code: "CONFLICT", message: error.message });
+        throw error;
+      }
+      await audit(created.organization.id, ctx.user.id, "ORG_CREATED", "organization", created.organization.id, {
+        ownerEmail: input.ownerEmail,
+        setupEmailed: created.emailed,
+      });
+      return { organizationId: created.organization.id, setupUrl: created.setupUrl, emailed: created.emailed };
+    }),
+
+  // Re-issues the owner's setup link (e.g. it expired before they used it).
+  // Only while they have no password: once they do, "Forgot password?" is
+  // the way back in, and staff must not be able to take over the account.
+  ownerSetupLink: superadminProcedure
+    .input(z.object({ organizationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await dbOrThrow();
+      const [organization] = await db.select().from(organizations).where(eq(organizations.id, input.organizationId)).limit(1);
+      if (!organization) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found." });
+      const owner = await getUserById(organization.ownerId);
+      if (!owner) throw new TRPCError({ code: "NOT_FOUND", message: "This organization's owner account was not found." });
+      if (owner.passwordHash) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The owner has already set a password. They can use \"Forgot password?\" to reset it." });
+      }
+      const setupUrl = await createAccountSetupLink(owner.id, appBaseUrl(ctx.req));
+      await audit(organization.id, ctx.user.id, "OWNER_SETUP_LINK_CREATED", "user", owner.id);
+      return { setupUrl };
     }),
 
   suspend: superadminProcedure

@@ -24,6 +24,7 @@ import { createApp } from "./_core/app";
 import type { TrpcContext } from "./_core/context";
 import { hashOpaqueToken, randomToken } from "./_core/localAuth";
 import { sdk } from "./_core/sdk";
+import { createShopWithOwner } from "./_core/shopOnboarding";
 
 const hasDb = Boolean(process.env.DATABASE_URL);
 const describeIfDb = hasDb ? describe : describe.skip;
@@ -261,13 +262,21 @@ describeIfDb("auth hardening (real Postgres)", () => {
     }
 
     it("issues a SameSite=Lax, HttpOnly session cookie", async () => {
-      const response = await post("/api/auth/register", {
-        name: "Cookie Owner",
-        email: `hard-cookie-${stamp}@example.com`,
+      // Accounts are invite-only, so get one through owner setup.
+      const { setupUrl } = await createShopWithOwner(
+        {
+          shopName: `Cookie Shop ${stamp}`,
+          ownerName: "Cookie Owner",
+          ownerEmail: `hard-cookie-${stamp}@example.com`,
+        },
+        ""
+      );
+      const token = new URL(setupUrl, baseUrl).searchParams.get("reset_token");
+      const response = await post("/api/auth/reset", {
+        token,
         password: "correct horse battery",
-        orgName: `Cookie Shop ${stamp}`,
       });
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(200);
       const cookie = response.headers.get("set-cookie") ?? "";
       expect(cookie).toContain("HttpOnly");
       expect(cookie).toContain("SameSite=Lax");

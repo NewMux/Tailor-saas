@@ -4,10 +4,10 @@ import { clientBrand } from "@/lib/branding";
 import { Loader2, Scissors } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { legalConfig } from "@/pages/public/legalConfig";
 
 type AuthGateProps = {
   callbackError?: string | null;
@@ -23,7 +23,6 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [orgName, setOrgName] = useState("");
   const [recoveryPassword, setRecoveryPassword] = useState("");
   const [recoveryConfirmation, setRecoveryConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -33,8 +32,6 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
   const [inviteShopName, setInviteShopName] = useState<string | null>(null);
   const { isArabic, toggleLanguage } = useLanguage();
   const [, navigate] = useLocation();
-  const plan = trpc.billing.plan.useQuery(undefined, { staleTime: 60 * 60 * 1000 });
-  const trialDays = plan.data?.billingEnabled ? plan.data.trialDays : 0;
 
   // An invite can only be accepted with the address it was sent to, so fill
   // that address in and lock the field rather than letting the person type
@@ -90,13 +87,6 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         await authApi.register({ name, email, password, mode: "join_invite", inviteToken });
         onInviteAccepted?.();
         navigate("/");
-      } else {
-        if (orgName.trim().length < 2) {
-          setError("Enter your shop or business name.");
-          return;
-        }
-        await authApi.register({ name, email, password, mode: "create_org", orgName: orgName.trim() });
-        navigate("/");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -111,22 +101,19 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
         <Button data-no-translate type="button" variant="outline" size="sm" className="absolute right-5 top-5 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
         <Scissors className="mx-auto h-8 w-8 text-primary" />
         <h1 className="mt-5 text-center text-2xl font-semibold">
-          {recoveryMode ? "Set a new password" : mode === "login" ? `Sign in to ${clientBrand.name}` : mode === "forgot" ? "Reset your password" : inviteToken ? "Join your team" : "Create your shop"}
+          {recoveryMode ? "Set your password" : mode === "login" ? `Sign in to ${clientBrand.name}` : mode === "forgot" ? "Reset your password" : "Join your team"}
         </h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           {recoveryMode
-            ? "For your security, choose a new password before entering the ERP workspace."
+            ? "Choose a password to finish setting up your account and enter the ERP workspace."
             : mode === "login"
               ? "Use the email and password set up for your staff account."
               : mode === "forgot"
                 ? "Enter your staff email and request a secure reset link."
-                : inviteToken
-                  ? inviteShopName
-                    ? `You're accepting a staff invite to ${inviteShopName}. Create your account to join its workspace.`
-                    : "You're accepting a staff invite. Create your account to join this shop's workspace."
-                  : "Set up a new, independent ERP workspace for your shop. You'll be its administrator."}
+                : inviteShopName
+                  ? `You're accepting a staff invite to ${inviteShopName}. Create your account to join its workspace.`
+                  : "You're accepting a staff invite. Create your account to join this shop's workspace."}
         </p>
-        {!recoveryMode && mode === "register" && !inviteToken && trialDays > 0 && <p className="mt-2 text-center text-sm font-medium text-emerald-700">{`${trialDays}-day free trial, no card required`}</p>}
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
           {recoveryMode ? (
@@ -174,20 +161,6 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
                   />
                 </div>
               )}
-              {mode === "register" && !inviteToken && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="orgName">Shop or business name</Label>
-                  <Input
-                    id="orgName"
-                    value={orgName}
-                    onChange={e => setOrgName(e.target.value)}
-                    required
-                    minLength={2}
-                    maxLength={160}
-                    autoComplete="organization"
-                  />
-                </div>
-              )}
               <div className="space-y-1.5">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -223,7 +196,7 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
 
           <Button type="submit" className="w-full" disabled={pending}>
             {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {recoveryMode ? "Update password" : mode === "login" ? "Sign in" : mode === "forgot" ? "Send reset link" : "Create account"}
+            {recoveryMode ? "Save password" : mode === "login" ? "Sign in" : mode === "forgot" ? "Send reset link" : "Create account"}
           </Button>
         </form>
 
@@ -239,17 +212,41 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
           >
             Forgot password?
           </button>}
-          <button
-            type="button"
-            className="block w-full underline-offset-4 hover:underline"
-            onClick={() => {
-              setMode(mode === "login" || mode === "forgot" ? "register" : "login");
-              setError(null);
-              setNotice(null);
-            }}
-          >
-            {mode === "register" ? "Already have an account? Sign in" : "Need an account? Register"}
-          </button>
+          {/* Accounts are invite-only: staff join through their shop's invite,
+              and new shops are set up by the platform team. */}
+          {inviteToken ? (
+            <button
+              type="button"
+              className="block w-full underline-offset-4 hover:underline"
+              onClick={() => {
+                setMode(mode === "register" ? "login" : "register");
+                setError(null);
+                setNotice(null);
+              }}
+            >
+              {mode === "register" ? "Already have an account? Sign in" : "Accept your invite instead"}
+            </button>
+          ) : mode === "forgot" ? (
+            <button
+              type="button"
+              className="block w-full underline-offset-4 hover:underline"
+              onClick={() => {
+                setMode("login");
+                setError(null);
+                setNotice(null);
+              }}
+            >
+              Back to sign in
+            </button>
+          ) : (
+            <p>
+              New shop?{" "}
+              <a href={`mailto:${legalConfig.supportEmail}`} className="text-foreground underline-offset-4 hover:underline">
+                Contact us
+              </a>{" "}
+              to get an account.
+            </p>
+          )}
         </div>}
         <nav className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-1 border-t pt-4 text-xs text-muted-foreground" aria-label="Legal">
           <Link href="/pricing" className="hover:underline">Pricing</Link>

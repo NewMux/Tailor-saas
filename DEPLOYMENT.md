@@ -1,9 +1,31 @@
 # Deployment and launch guide (Vercel + Supabase)
 
-This guide takes the app from a fresh Vercel project to a paid, self-serve
-SaaS: sign-up with a free trial, subscriptions through Paddle, transactional
-email through Resend, and Supabase as the backend for the Postgres database
-and private file storage.
+This guide takes the app from a fresh Vercel project to a paid, invite-only
+SaaS: shops created by your team with a free trial, subscriptions through
+Paddle, transactional email through Resend, and Supabase as the backend for
+the Postgres database and private file storage.
+
+## Onboarding model: invite-only
+
+There is no public sign-up. A superadmin creates each shop from the ops
+console (`/ops` → **Create shop**: shop name, owner's name and email), which
+makes the owner the shop's administrator and issues a one-time setup link,
+valid for 7 days, for them to choose a password. The link is emailed when
+Resend is configured, and always shown to the operator to send by hand. If it
+expires unused, the shop's page in `/ops` offers **New setup link** until the
+owner has set a password; after that they use "Forgot password?". Owners then
+add their own staff with invite links from Owner Settings.
+
+The same is available from a shell, e.g. to create the very first shop:
+
+```bash
+DATABASE_URL=... AUTH_BASE_URL=https://app.yourdomain.com \
+  pnpm shop:create --shop "Al Noor Tailors" --owner "Sara Ali" --email sara@example.com
+```
+
+The sign-in page and `/pricing` point prospective customers to
+`supportEmail` in `client/src/pages/public/legalConfig.ts`; set it before
+launch.
 
 Every integration is optional and switched on by its environment variables.
 Deploy with only the required variables first, confirm it works, then add
@@ -51,7 +73,7 @@ salted scrypt hashes.
 
 - **Request size:** Vercel rejects request bodies over 4.5 MB, so staff documents are capped at 3 MB each (they're sent base64-encoded).
 - **Request time:** each request may run up to 30 seconds (`maxDuration` in the build script).
-- **Rate limiting** of login, sign-up and password-reset attempts is kept in each function instance's memory, so it's a per-instance brake on brute force rather than an exact global quota.
+- **Rate limiting** of login, invite-acceptance and password-reset attempts is kept in each function instance's memory, so it's a per-instance brake on brute force rather than an exact global quota.
 
 ## Monthly cost at launch
 
@@ -207,7 +229,7 @@ tax/VAT and sends receipts. The app only needs to know each shop's
 subscription status, which Paddle pushes to it by webhook.
 
 **How it behaves for shops**
-- A new shop gets a free trial (`TRIAL_DAYS`, default 14) with no card.
+- A new shop gets a free trial (`TRIAL_DAYS`, default 14) with no card, starting when you create it.
 - The owner subscribes from **Billing** in the sidebar (Paddle checkout overlay), and later manages their card, invoices or cancellation through Paddle's customer portal.
 - When the trial ends without a subscription, or a payment fails (`past_due`), or the subscription is paused or canceled, the shop becomes **read-only**. Everyone can still sign in, view and export, but saving anything is refused until the subscription is active again. A banner explains this and links to Billing.
 - Platform staff can mark any shop **billing-exempt** (partners, manual invoicing) or **extend a trial** from the ops console (`/ops` → organization).
@@ -252,7 +274,7 @@ is restricted and the Billing page and banners disappear.
 | Area | Check |
 |---|---|
 | Health | `https://<domain>/api/health` returns `{"ok":true}`. |
-| Sign-up | "Create your shop" creates a new, empty organization with its owner as admin; the welcome email arrives. |
+| Onboarding | The sign-in page has no sign-up option. `/ops` → Create shop makes a new, empty organization; the owner's setup link (emailed or copied) lets them choose a password and land in their workspace. |
 | Email | "Forgot password?" delivers a working reset link. |
 | Staff invite | Owner Settings → Invite staff emails the invite; accepting with the invited email works, and a different email is refused. |
 | Tenant isolation | With two organizations, neither sees the other's customers, sales, inventory or staff. |
@@ -282,15 +304,15 @@ pg_dump --format=custom --no-owner --no-acl --schema=public --schema=drizzle \
 Platform staff (your own operators, as opposed to a shop's own staff) is a
 separate concept from any organization's roles; see the comment on the
 `platformStaff` table in `drizzle/schema.ts`. There is no UI to grant the
-first one, so bootstrap it from a shell with access to `DATABASE_URL`, after
-the person has signed up for an ordinary account:
+first one, so bootstrap it from a shell with access to `DATABASE_URL`, once
+the person has an account (create one with `pnpm shop:create` if needed):
 
 ```bash
 DATABASE_URL=... pnpm platform:grant-staff --email you@example.com --role superadmin
 ```
 
 `--role` is `support` (read-only across organizations) or `superadmin`
-(can also suspend/reactivate organizations, change billing exemptions and
+(can also create shops, suspend/reactivate organizations, change billing exemptions and
 trials, grant/revoke other platform staff, and impersonate a user for
 support). Pass `--revoke` instead of `--role` to remove access. This script
 remains the break-glass path even though the ops panel can grant and revoke
@@ -299,7 +321,8 @@ password resets.
 
 ## Security notes
 
-- Login, sign-up, forgot-password and reset endpoints are rate-limited per IP.
+- Login, invite-acceptance, forgot-password and reset endpoints are rate-limited per IP.
+- Public sign-up is closed: `/api/auth/register` only accepts a valid staff invite, and only superadmins can create shops.
 - The app trusts exactly one proxy hop (Vercel's, which overwrites `X-Forwarded-For` with the client address), so client IPs and HTTPS detection are correct.
 - Paddle webhooks are verified against `PADDLE_WEBHOOK_SECRET` over the raw request body, and replays older than 5 minutes are rejected. A subscription can only be linked to a shop through checkout data signed by the server.
 - Invite links only work for the email address they were sent to.
