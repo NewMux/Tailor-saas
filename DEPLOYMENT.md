@@ -1,8 +1,9 @@
-# Deployment and launch guide (Railway)
+# Deployment and launch guide (Railway + Supabase)
 
 This guide takes the app from a fresh Railway project to a paid, self-serve
 SaaS: sign-up with a free trial, subscriptions through Paddle, transactional
-email through Resend, and private file storage on Cloudflare R2.
+email through Resend, and Supabase as the backend for the Postgres database
+and private file storage.
 
 Every integration is optional and switched on by its environment variables.
 Deploy with only the required variables first, confirm it works, then add
@@ -12,19 +13,28 @@ email, storage and billing one at a time.
 
 One Express/tRPC process serves both the built React frontend and the `/api/*`
 backend from a single origin — there is no separate frontend host. Railway
-runs the repo's existing `Dockerfile` directly (configured by `railway.json`)
-and provisions a managed Postgres database alongside it.
+runs the repo's existing `Dockerfile` directly (configured by `railway.json`).
+Supabase is the backend: its managed Postgres holds all data, and Supabase
+Storage holds staff documents through its S3-compatible API.
 
 ```text
 Browser ──► https://app.yourdomain.com ──► Railway (HTTPS, routing)
                                                │
                                                └── app service (Dockerfile)
                                                      ├── React frontend + /api/*
-                                                     ├── Postgres (Railway-managed)
+                                                     ├──► Supabase Postgres (all data)
+                                                     ├──► Supabase Storage  (staff documents)
                                                      ├──► Resend   (emails)
-                                                     ├──► R2       (staff documents)
                                                      └──◄► Paddle  (checkout + webhooks)
 ```
+
+The app uses Supabase as a database and file store only. Sign-in stays the
+app's own email/password auth, and the browser never talks to Supabase
+directly: every request goes through the Express server, which enforces
+tenant isolation and roles. Row-level security is turned on for every table
+with no policies (migration `0015_enable_rls`), so Supabase's public Data API
+cannot read or write anything even with the project's anon key, while the
+server, connecting as the table owner, is unaffected.
 
 The browser sends an opaque session token in the `Authorization` header (and
 an HttpOnly cookie); it's hashed before storage. Passwords are stored as
@@ -34,9 +44,9 @@ salted scrypt hashes.
 
 | Piece | Provider | Cost |
 |---|---|---|
-| App + Postgres | Railway Hobby | ~$5–10 |
+| App | Railway Hobby | ~$5 |
+| Postgres + file storage | Supabase Free (testing) / Pro (production) | $0 / $25 |
 | Email | Resend free tier (3,000/month) | $0 |
-| File storage | Cloudflare R2 (10 GB free) | $0 |
 | Billing | Paddle | no monthly fee; a % of each payment |
 | Errors | Sentry free tier (optional) | $0 |
 | Domain | any registrar | ~$1 |
@@ -44,21 +54,45 @@ salted scrypt hashes.
 Check current prices on each provider's site. All shops share one app and
 one database, so this cost does not grow per customer.
 
-## 1. Create the Railway project
+Use Supabase Pro for production: Free projects pause after a week without
+activity and have no daily backups.
 
-1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → select this repository.
-2. In the same project, **+ New** → **Database** → **Add PostgreSQL**.
-3. On the app service → **Variables**, reference the database rather than retyping it: `DATABASE_URL=${{Postgres.DATABASE_URL}}`.
+## 1. Supabase project (database)
+
+The production project is **Tafsell** (ref `phbiaqtxqwqzouqsexbj`, region
+`ap-northeast-1`) in the NewMux Ventures organization. Its schema is already
+migrated through `0015_enable_rls`; the container's `drizzle-kit migrate`
+applies any later migrations on each deploy. For a new project, create one at
+[supabase.com/dashboard](https://supabase.com/dashboard) and the first deploy
+creates the whole schema.
+
+Get the connection string: project → **Connect** → **Session pooler** (port
+`5432`). Use the session pooler rather than the direct connection: the direct
+host is IPv6-only, while the pooler works over IPv4 from Railway, and session
+mode keeps full Postgres behavior for migrations. Add `sslmode=require`:
+
+```text
+postgresql://postgres.phbiaqtxqwqzouqsexbj:<db-password>@aws-<n>-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+```
+
+Copy the host exactly as the dashboard shows it. URL-encode the password if
+it contains URL-reserved characters; reset it under **Project Settings →
+Database** if you don't have it.
+
+## 2. Create the Railway project
+
+1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → select this repository. Don't add a Railway Postgres database; Supabase is the database.
+2. On the app service → **Variables**, set `DATABASE_URL` to the Supabase session-pooler string from step 1.
 
 `railway.json` tells Railway to build the `Dockerfile` and to use
 `GET /api/health` as the health check. That endpoint queries Postgres, so a
 container with a broken database connection is restarted instead of looking
 healthy.
 
-## 2. Required environment variables
+### Required environment variables
 
 ```dotenv
-DATABASE_URL=${{Postgres.DATABASE_URL}}
+DATABASE_URL=postgresql://postgres.<project-ref>:<db-password>@<pooler-host>:5432/postgres?sslmode=require
 AUTH_BASE_URL=https://app.yourdomain.com
 NODE_ENV=production
 LOG_LEVEL=info
@@ -90,8 +124,10 @@ starting the server:
 ./node_modules/.bin/drizzle-kit migrate && exec node dist/index.js
 ```
 
-The first deploy after this guide applies migration `0014_billing`, which
-gives every existing organization a fresh 14-day trial.
+Against the Tafsell Supabase project this is a no-op until a new migration
+is added: its schema is already at `0015_enable_rls`. Every new table a
+migration creates must also `ENABLE ROW LEVEL SECURITY`; `server/rls.test.ts`
+fails CI if one doesn't.
 
 On each deploy Railway sends SIGTERM to the old container. The server stops
 accepting connections, lets in-flight requests finish (up to 10 seconds), and
@@ -116,24 +152,26 @@ EMAIL_FROM=Tafsell <hello@yourdomain.com>
 `EMAIL_FROM` must use the verified domain. Check it by using "Forgot password?"
 on your own account.
 
-## 6. File storage for staff documents (Cloudflare R2)
+## 6. File storage for staff documents (Supabase Storage)
 
 Staff documents (contracts, IDs) are private: the app streams them through a
-permission check and a signed link that expires after 5 minutes.
+permission check and a signed link that expires after 5 minutes. The app
+talks to Supabase Storage through its S3-compatible API.
 
-1. Cloudflare dashboard → **R2** → **Create bucket** (e.g. `tafsell-documents`). Keep it private: no public access and no custom domain.
-2. **R2 → Manage API tokens → Create API token** with **Object Read & Write**, limited to that bucket. Copy the access key ID and secret.
+1. The private bucket `staff-documents` (10 MB per file) already exists in the Tafsell project. For a new project: **Storage → New bucket**, name `staff-documents`, leave **Public bucket** off.
+2. **Project Settings → Storage → S3 access keys → New access key**. Copy the access key ID and secret. They bypass RLS and can reach every bucket, so they belong only in Railway's variables.
 3. Set on Railway:
 
 ```dotenv
-S3_ENDPOINT=https://<your-account-id>.r2.cloudflarestorage.com
-S3_REGION=auto
-S3_BUCKET=tafsell-documents
+S3_ENDPOINT=https://phbiaqtxqwqzouqsexbj.storage.supabase.co/storage/v1/s3
+S3_REGION=ap-northeast-1
+S3_BUCKET=staff-documents
 S3_ACCESS_KEY_ID=...
 S3_SECRET_ACCESS_KEY=...
 ```
 
-Any S3-compatible provider works the same way (AWS S3, Backblaze B2, and so on).
+Any other S3-compatible provider (Cloudflare R2, AWS S3, Backblaze B2) works
+with the same five variables.
 
 ## 7. Subscription billing (Paddle)
 
@@ -195,14 +233,22 @@ is restricted and the Billing page and banners disappear.
 | Billing | Sandbox checkout activates the shop; an expired trial makes it read-only; the ops console can exempt it. |
 | Public pages | `/pricing`, `/terms`, `/privacy`, `/refunds` load while signed out and show your real business details. |
 | Persistence | Create a customer, redeploy, and confirm it's still there. |
-| Backups | Railway Postgres backups are enabled (see below). |
+| Backups | The Supabase project is on Pro with daily backups (see below). |
+| Data API | `curl https://phbiaqtxqwqzouqsexbj.supabase.co/rest/v1/users -H "apikey: <anon key>"` returns `[]`, never rows. |
 
 ## 9. Backups
 
-Railway's Postgres takes automatic backups on paid plans; check
-**Postgres service → Backups**. For an extra off-site copy, run
-`scripts/backup-db.sh` against the public connection string from the Postgres
-service's **Connect** tab, from any machine with `pg_dump`, on a schedule.
+Supabase Pro takes daily backups (7 days kept); check **Database →
+Backups**. Point-in-time recovery is a paid add-on. For an extra off-site
+copy, run `pg_dump` (version 17 or newer, matching Supabase's Postgres 17) on
+a schedule from any machine:
+
+```bash
+pg_dump --format=custom --no-owner --no-acl --schema=public --schema=drizzle \
+  "$DATABASE_URL" > tafsell-$(date -u +%Y%m%dT%H%M%SZ).dump
+```
+
+`scripts/backup-db.sh` does the same for the local docker-compose database.
 
 ## 10. Granting platform-staff access
 
@@ -234,8 +280,11 @@ password resets.
 
 ## Local development
 
-`docker-compose.yml` is for local development only (it starts Postgres and the
-app together); Railway builds the `Dockerfile` directly and doesn't use it.
+`docker-compose.yml` is for local development only (it starts a plain Postgres
+and the app together); Railway builds the `Dockerfile` directly and doesn't
+use it. Plain Postgres behaves the same as Supabase for this app, and CI runs
+against it too. Don't point local development or tests at the production
+Supabase database: the test suite writes rows.
 
 ## Internal sales demo
 

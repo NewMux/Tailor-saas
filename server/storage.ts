@@ -1,6 +1,6 @@
 // Private file storage (staff documents). Two interchangeable backends:
-//   - any S3-compatible bucket (Cloudflare R2, AWS S3, Backblaze B2, ...)
-//     when the S3_* settings are present: the production default;
+//   - any S3-compatible bucket (Supabase Storage in production; R2, AWS S3,
+//     Backblaze B2, ...) when the S3_* settings are present;
 //   - the legacy Manus Forge presign proxy when BUILT_IN_FORGE_API_* are set.
 // Either way files are never public: stored objects are referenced as
 // /manus-storage/{key}, which server/_core/storageProxy.ts serves by
@@ -19,7 +19,7 @@ function getS3Client() {
     endpoint: ENV.s3Endpoint,
     region: ENV.s3Region,
     credentials: { accessKeyId: ENV.s3AccessKeyId, secretAccessKey: ENV.s3SecretAccessKey },
-    // R2 and most non-AWS providers need path-style bucket addressing.
+    // Supabase Storage, R2 and most non-AWS providers need path-style bucket addressing.
     forcePathStyle: true,
   });
   return s3Client;
