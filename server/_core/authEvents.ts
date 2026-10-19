@@ -76,3 +76,17 @@ export async function purgeOldAuthNoise() {
     .delete(authEvents)
     .where(and(inArray(authEvents.type, ["login_attempt", "login_failed", "login_blocked"]), lt(authEvents.createdAt, new Date(Date.now() - NOISE_RETENTION_MS))));
 }
+
+const RESET_WINDOW_MS = 60 * 60 * 1000;
+const RESET_MAX_PER_WINDOW = 3;
+
+/** True when this address has already asked for enough reset links this hour. */
+export async function tooManyResetRequests(email: string) {
+  const db = await getDb();
+  if (!db) return false;
+  const [recent] = await db
+    .select({ n: count() })
+    .from(authEvents)
+    .where(and(eq(authEvents.emailHash, emailHash(email)), eq(authEvents.type, "reset_requested"), gt(authEvents.createdAt, new Date(Date.now() - RESET_WINDOW_MS))));
+  return Number(recent?.n ?? 0) >= RESET_MAX_PER_WINDOW;
+}

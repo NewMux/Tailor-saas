@@ -3,8 +3,23 @@ import rateLimit from "express-rate-limit";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
+/**
+ * One client address per bucket. IPv6 clients usually hold a whole /64, so
+ * counting each /128 separately would let a single machine rotate addresses
+ * to dodge the limit; mask IPv6 to its /64 prefix.
+ */
+export function clientKey(ip: string | undefined) {
+  if (!ip) return "unknown";
+  const address = ip.replace(/^::ffff:/i, "");
+  if (!address.includes(":")) return address;
+  const groups = address.split("::")[0]!.split(":").filter(Boolean);
+  if (address.includes("::") || groups.length >= 4) return `${groups.slice(0, 4).join(":")}::/64`;
+  return address;
+}
+
 function authLimiter(limit: number, options: { skipSuccessfulRequests?: boolean } = {}) {
   return rateLimit({
+    keyGenerator: request => clientKey(request.ip),
     windowMs: FIFTEEN_MINUTES,
     limit,
     standardHeaders: "draft-7",
@@ -25,7 +40,8 @@ function authLimiter(limit: number, options: { skipSuccessfulRequests?: boolean 
  * staff signing in from one IP never gets locked out by successful logins.
  */
 export function registerAuthRateLimits(app: Express) {
-  if (process.env.NODE_ENV === "test" || process.env.RATE_LIMIT_DISABLED === "1") return;
+  // The off switch exists for tests and local runs only; it can never silence production.
+  if (process.env.NODE_ENV === "test" || (process.env.RATE_LIMIT_DISABLED === "1" && process.env.NODE_ENV !== "production")) return;
   app.post("/api/auth/login", authLimiter(20, { skipSuccessfulRequests: true }));
   app.post("/api/auth/reset", authLimiter(10, { skipSuccessfulRequests: true }));
   app.post("/api/auth/register", authLimiter(20));

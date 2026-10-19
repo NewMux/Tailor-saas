@@ -10,6 +10,7 @@ import { registerHealthRoute } from "./health";
 import { registerPaddleWebhook } from "../billing/webhook";
 import { ENV } from "./env";
 import { createHttpLogger, logger } from "./logger";
+import { HSTS, SECURITY_HEADERS } from "./securityHeaders";
 import { captureError } from "./sentry";
 
 function registerCors(app: Express) {
@@ -50,22 +51,20 @@ export function createApp(): Express {
   app.set("trust proxy", 1);
   app.use(createHttpLogger(logger, { ignore: url => url === "/api/auth/session" || url === "/api/health" }));
   app.use((req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     res.setHeader("Cache-Control", "no-store");
     if (req.secure || req.headers["x-forwarded-proto"] === "https") {
-      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+      res.setHeader("Strict-Transport-Security", HSTS);
     }
     next();
   });
   registerCors(app);
   registerHealthRoute(app);
   registerPaddleWebhook(app);
+  // Limits first, so a flood is refused before any request body is parsed.
+  registerAuthRateLimits(app);
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ limit: "10mb", extended: true }));
-  registerAuthRateLimits(app);
   registerAuthRoutes(app);
   registerStorageProxy(app);
   app.use(

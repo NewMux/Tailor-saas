@@ -9,7 +9,7 @@ earlier stage of this project. They describe:
 - A superseded infrastructure split — frontend on Vercel, backend + Postgres
   on Coolify/Hetzner — including a reference to a `HETZNER_DEPLOYMENT.md`
   file that no longer exists in this repo. The current production target is
-  a single Railway service; see [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md).
+  a single Vercel project; see [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md).
 - Security/hardening and handover audits performed against that earlier
   single-tenant state.
 

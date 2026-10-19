@@ -348,6 +348,9 @@ authorization, tenant isolation and security.
 - The app trusts exactly one proxy hop (Vercel's, which overwrites `X-Forwarded-For` with the client address), so client IPs and HTTPS detection are correct.
 - Paddle webhooks are verified against `PADDLE_WEBHOOK_SECRET` over the raw request body, and replays older than 5 minutes are rejected. A subscription can only be linked to a shop through checkout data signed by the server.
 - Invite links only work for the email address they were sent to.
+- Every response carries `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and HSTS. The `Content-Security-Policy` ships **report-only**; once the browser console shows no violations on login, the point of sale and Billing (including a Paddle checkout) on the live site, set `CSP_ENFORCE=1` to enforce it.
+- Migration `0018` removes the Supabase Data API's `anon`/`authenticated` grants on `public`. Also disable the Data API and Auth email sign-ups in the Supabase dashboard, and add a Vercel Firewall rate-limit rule for `/api/auth/*` (the in-app limiter is per instance).
+- CI runs `pnpm audit --prod --audit-level=high`, CodeQL and Dependabot; the security probe (`pnpm security:probe`) runs in CI and, against production, from the `security-probe` workflow.
 
 ## Local development
 

@@ -21,7 +21,7 @@ import { passwordResetEmail } from "./emailTemplates";
 import { logger } from "./logger";
 import { appBaseUrl } from "./urls";
 import { captureError } from "./sentry";
-import { purgeOldAuthNoise, recordAuthEvent, registerLoginAttempt } from "./authEvents";
+import { purgeOldAuthNoise, recordAuthEvent, registerLoginAttempt, tooManyResetRequests } from "./authEvents";
 import type { ImpersonationMode } from "./impersonationPolicy";
 
 const scrypt = promisify(scryptCallback);
@@ -342,6 +342,17 @@ async function register(req: Request, res: Response) {
   const db = await getDb();
   if (!db)
     throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
+  // The invite is checked before anything about existing accounts is
+  // revealed, so this endpoint cannot be used to find out who has an account.
+  const inviteToken =
+    typeof req.body?.inviteToken === "string" ? req.body.inviteToken.trim() : "";
+  if (!inviteToken)
+    throw new AuthError("An invite link is required to join a shop.", 400, "INVITE_REQUIRED");
+  const invite = await getActiveInviteByTokenHash(hashOpaqueToken(inviteToken));
+  if (!invite)
+    throw new AuthError("This invite link is invalid or has expired.", 400, "INVITE_INVALID");
+  if (normalizeEmail(invite.email) !== email)
+    throw new AuthError("Use the email address this invite was sent to.", 400, "INVITE_EMAIL_MISMATCH");
   if (await getUserByEmail(email))
     throw new AuthError(
       "An account already exists for this email. Use the password reset option.",
@@ -360,42 +371,13 @@ async function register(req: Request, res: Response) {
 
   let user: User;
   try {
-    const inviteToken =
-      typeof req.body?.inviteToken === "string"
-        ? req.body.inviteToken.trim()
-        : "";
-    if (!inviteToken)
-      throw new AuthError(
-        "An invite link is required to join a shop.",
-        400,
-        "INVITE_REQUIRED"
-      );
-    const invite = await getActiveInviteByTokenHash(
-      hashOpaqueToken(inviteToken)
-    );
-    if (!invite)
-      throw new AuthError(
-        "This invite link is invalid or has expired.",
-        400,
-        "INVITE_INVALID"
-      );
-    // The invite is addressed to one person: without this check anyone
-    // who got hold of the link could join the shop under any address.
-    if (normalizeEmail(invite.email) !== email)
-      throw new AuthError(
-        "Use the email address this invite was sent to.",
-        400,
-        "INVITE_EMAIL_MISMATCH"
-      );
     const result = await acceptInviteAndCreateUser(invite.id, newUser);
     user = result.user;
   } catch (error) {
     if (error instanceof AuthError) throw error;
-    throw new AuthError(
-      error instanceof Error ? error.message : "Unable to create the account",
-      400,
-      "ACCOUNT_CREATE_FAILED"
-    );
+    // Database errors can contain the statement and its values; never echo them.
+    logger.error({ err: error }, "Invite acceptance failed");
+    throw new AuthError("Unable to create the account. The invite may have just been used.", 400, "ACCOUNT_CREATE_FAILED");
   }
 
   const token = await createSession(user.id);
@@ -462,8 +444,11 @@ async function forgotPassword(req: Request, res: Response) {
     typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
   const user = email ? await getUserByEmail(email) : undefined;
   let resetUrlValue: string | undefined;
-  if (user?.email) {
-    await recordAuthEvent({ type: "reset_requested", email, userId: user.id, req });
+  // At most a few links per address per hour: stops mail-bombing a person and
+  // stops anyone from endlessly replacing (and so cancelling) their pending link.
+  const capped = email ? await tooManyResetRequests(email) : false;
+  if (email) await recordAuthEvent({ type: "reset_requested", email, userId: user?.id, req });
+  if (user?.email && !capped) {
     const token = await createResetToken(user.id);
     resetUrlValue = resetUrl(appBaseUrl(req), token);
     const { sent } = await sendEmail(passwordResetEmail(user.email, resetUrlValue));
@@ -481,7 +466,8 @@ async function forgotPassword(req: Request, res: Response) {
     message: isEmailConfigured()
       ? "If an account exists for this email, we've sent a password reset link. Check your inbox."
       : "If an account exists for this email, a reset link has been generated for the server administrator.",
-    ...(ENV.isProduction ? {} : { resetUrl: resetUrlValue }),
+    // Convenience for local development only; every other environment keeps links out of responses.
+    ...(process.env.NODE_ENV === "development" ? { resetUrl: resetUrlValue } : {}),
   });
 }
 

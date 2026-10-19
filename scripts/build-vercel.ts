@@ -18,6 +18,7 @@ import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
 import { parseEnv } from "../server/_core/env";
+import { HSTS, SECURITY_HEADERS } from "../server/_core/securityHeaders";
 
 const root = path.resolve(import.meta.dirname, "..");
 const output = path.join(root, ".vercel", "output");
@@ -101,13 +102,7 @@ writeFileSync(
   )
 );
 
-const securityHeaders = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "strict-origin-when-cross-origin",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-};
+const securityHeaders = { ...SECURITY_HEADERS, "Strict-Transport-Security": HSTS };
 
 writeFileSync(
   path.join(output, "config.json"),

@@ -4,6 +4,19 @@ import { expect, type Page } from "@playwright/test";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
+// These helpers create shops and operators with the real scripts, against
+// whatever DATABASE_URL points at. Never let that be a shared database.
+const databaseHost = (() => {
+  try {
+    return new URL(process.env.DATABASE_URL ?? "").hostname;
+  } catch {
+    return "";
+  }
+})();
+if (databaseHost && !["localhost", "127.0.0.1", "::1", "[::1]", "postgres"].includes(databaseHost)) {
+  throw new Error(`E2E tests refuse to run against a non-local database (${databaseHost}).`);
+}
+
 export type ShopOwner = {
   name: string;
   orgName: string;

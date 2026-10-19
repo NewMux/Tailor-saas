@@ -20,6 +20,15 @@ import type { TrpcContext } from "./context";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // Unexpected failures (a database error, say) carry the SQL and its values
+  // in their message. In production the caller gets a generic message; the
+  // detail stays in the server log.
+  errorFormatter({ shape, error }) {
+    if (error.code === "INTERNAL_SERVER_ERROR" && process.env.NODE_ENV === "production") {
+      return { ...shape, message: "Something went wrong.", data: { ...shape.data, stack: undefined } };
+    }
+    return shape;
+  },
 });
 
 export const router = t.router;

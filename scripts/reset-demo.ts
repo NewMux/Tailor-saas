@@ -55,6 +55,7 @@ const DEMO_ORG_SLUG = process.env.DEMO_ORG_SLUG;
 
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
 if (!DEMO_OWNER_EMAIL) throw new Error("DEMO_OWNER_EMAIL is required");
+if (!DEMO_ORG_SLUG) throw new Error("DEMO_ORG_SLUG is required (guards against wiping the wrong organization)");
 
 function contextFor(user: TrpcContext["user"]): TrpcContext {
   return { user, req: {} as TrpcContext["req"], res: {} as TrpcContext["res"] };
@@ -117,7 +118,7 @@ async function main() {
   }
   const organizationId = demoUser.organizationId;
 
-  if (DEMO_ORG_SLUG) {
+  {
     const org = (
       await db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1)
     )[0];

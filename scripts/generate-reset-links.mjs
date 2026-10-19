@@ -8,7 +8,10 @@ if (!databaseUrl) throw new Error("DATABASE_URL is required");
 if (!authBaseUrl) throw new Error("AUTH_BASE_URL is required");
 
 const sql = postgres(databaseUrl, { prepare: false });
-const users = await sql`SELECT "id", "name", "email" FROM "users" WHERE "email" IS NOT NULL ORDER BY "id"`;
+const targetEmail = (process.env.RESET_EMAIL || process.argv[2] || "").trim().toLowerCase();
+if (!targetEmail) throw new Error("Pass the account's email: RESET_EMAIL=person@example.com (one account per run)");
+const users = await sql`SELECT "id", "name", "email" FROM "users" WHERE lower("email") = ${targetEmail}`;
+if (users.length !== 1) throw new Error(`Expected exactly one account for ${targetEmail}, found ${users.length}`);
 const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
 const links = [];
 

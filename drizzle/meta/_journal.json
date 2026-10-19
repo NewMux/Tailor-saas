@@ -134,6 +134,13 @@
       "when": 1788300000000,
       "tag": "0017_operator_security",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788400000000,
+      "tag": "0018_lock_down_data_api",
+      "breakpoints": true
     }
   ]
 }
