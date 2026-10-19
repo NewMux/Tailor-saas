@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 
 const navigation = [
   { label: "Organizations", path: "/ops" },
+  { label: "Users", path: "/ops/users" },
   { label: "Platform staff", path: "/ops/staff" },
-  { label: "Audit feed", path: "/ops/audit" },
+  { label: "Audit", path: "/ops/audit" },
+  { label: "Security", path: "/ops/security" },
 ];
 
 export default function OpsShell({ children }: { children: React.ReactNode }) {

@@ -122,4 +122,22 @@ test.describe.serial("superadmin ops console", () => {
     await expect(ownRow.getByText("You")).toBeVisible();
     await expect(ownRow.getByRole("button", { name: "Revoke" })).toHaveCount(0);
   });
+
+  test("the verification pages show users with their effective access, the audit trail and live security checks", async ({ page }) => {
+    await loginExisting(page, staffOwner);
+
+    await page.goto("/ops/users");
+    await page.getByLabel("Search users").fill(targetOwner.email);
+    await page.getByRole("row").filter({ hasText: targetOwner.email }).click();
+    await expect(page.getByText("Effective access")).toBeVisible();
+    await expect(page.getByText("Administer the shop")).toBeVisible();
+
+    await page.goto("/ops/audit");
+    await expect(page.getByRole("heading", { name: "Audit" })).toBeVisible();
+    await expect(page.getByText("IMPERSONATION_STARTED").first()).toBeVisible();
+
+    await page.goto("/ops/security");
+    await expect(page.getByText(/Row-level security on every table/)).toBeVisible();
+    await expect(page.getByText(/Cross-tenant references:/)).toBeVisible();
+  });
 });

@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { organizations, platformStaff, shopSettings, staffAccessInvites, userBusinessRoles, userCustomRoles, users, type InsertUser } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { inTenantScope } from "./_core/requestContext";
 
 let database: ReturnType<typeof drizzle> | null = null;
 let client: ReturnType<typeof postgres> | null = null;
@@ -20,16 +21,52 @@ const TENANT_TABLES = [
 ];
 
 /**
- * Cheap regex-style safety net, not a full SQL parser: fails a query that
- * touches a known tenant table without an "organizationId" predicate
- * anywhere in the statement. Only active in tests / TENANT_GUARD=1 so it
- * never affects production if a table legitimately needs an escape hatch.
+ * Safety net for tenant isolation, active in tests and with TENANT_GUARD=1.
+ *
+ * Every query touching a tenant table must mention organizationId. Inside a
+ * tenant request (see requestContext) it is stricter: each tenant table in
+ * FROM/JOIN/UPDATE/DELETE must be constrained by its own organizationId in the
+ * WHERE or JOIN condition, and inserts must set it. That is what catches a
+ * join that returns another tenant's row. It is a tripwire on the SQL text,
+ * not a proof: it cannot tell whether the predicate is combined with OR.
  */
+const TENANT_GUARD_ALLOWED: RegExp[] = [];
+
+function checkTenantRequestQuery(query: string) {
+  const lower = query.toLowerCase();
+  const problems: string[] = [];
+  if (lower.startsWith("insert into")) {
+    for (const table of TENANT_TABLES) {
+      if (lower.startsWith(`insert into "${table.toLowerCase()}"`) && !query.slice(0, query.indexOf(" values")).includes('"organizationId"')) {
+        problems.push(`insert into "${table}" without organizationId`);
+      }
+    }
+    return problems;
+  }
+  const afterWhere = lower.indexOf(" where ") === -1 ? "" : query.slice(lower.indexOf(" where "));
+  const fromIndex = lower.search(/\b(from|update)\b/);
+  const conditions = lower.startsWith("update ") || lower.startsWith("delete ") ? afterWhere : query.slice(Math.max(fromIndex, 0));
+  const touched = new Set<string>();
+  for (const table of TENANT_TABLES) {
+    if (new RegExp(`\\b(from|join|update)\\s+"${table}"`, "i").test(query)) touched.add(table);
+  }
+  for (const table of Array.from(touched)) {
+    if (!conditions.includes(`"${table}"."organizationId" =`) && !conditions.includes(`"${table}"."organizationId" in`)) {
+      problems.push(`"${table}" is not constrained by its organizationId`);
+    }
+  }
+  return problems;
+}
+
 class TenantGuardLogger implements Logger {
   logQuery(query: string) {
     const touchesTenantTable = TENANT_TABLES.some(table => query.includes(`"${table}"`));
     if (touchesTenantTable && !query.includes("organizationId")) {
       throw new Error(`[TenantGuard] Query touches a tenant table without an organizationId filter:\n${query}`);
+    }
+    if (touchesTenantTable && inTenantScope() && !TENANT_GUARD_ALLOWED.some(pattern => pattern.test(query))) {
+      const problems = checkTenantRequestQuery(query);
+      if (problems.length) throw new Error(`[TenantGuard] ${problems.join("; ")}:\n${query}`);
     }
   }
 }

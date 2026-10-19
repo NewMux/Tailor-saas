@@ -111,6 +111,11 @@ jobs:
         env:
           E2E_BASE_URL: http://localhost:3000
 
+      - name: Security probe (cross-tenant checks)
+        run: pnpm security:probe --base-url http://localhost:3000 --mode full --bootstrap
+        env:
+          AUTH_BASE_URL: http://localhost:3000
+
       - name: Show server log on failure
         if: failure()
         run: cat server.log

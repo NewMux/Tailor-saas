@@ -34,13 +34,13 @@ export function registerStorageProxy(app: Express) {
       return;
     }
 
-    if (!isStorageConfigured()) {
-      res.status(500).send("Storage proxy not configured");
-      return;
-    }
-
     try {
+      // Authenticate first: anonymous callers learn nothing, not even whether storage is set up.
       const { user, impersonatedBy } = await sdk.authenticateRequest(req);
+      if (!isStorageConfigured()) {
+        res.status(500).send("Storage proxy not configured");
+        return;
+      }
       // Staff documents are personal data: operators never read them by
       // borrowing a shop user's session, in read-only or write mode.
       if (impersonatedBy) {

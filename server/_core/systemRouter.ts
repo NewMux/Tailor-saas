@@ -14,7 +14,7 @@ export const systemRouter = router({
     })),
 
   // Platform staff only: every shop owner carries the legacy users.role
-  // "admin" flag, so globalUserAdminProcedure would let any tenant message
+  // "admin" flag, so a plain admin check would let any tenant message
   // the platform operator.
   notifyOwner: platformProcedure
     .input(

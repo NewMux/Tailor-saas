@@ -56,6 +56,16 @@ describeIfDb("storage proxy (real Postgres)", () => {
     expect((await get(key)).status).toBe(401);
   });
 
+  it("answers anonymous callers with 401 even when storage is not configured", async () => {
+    const configured = { ...ENV };
+    Object.assign(ENV, { s3Endpoint: "", s3Region: "", s3Bucket: "", s3AccessKeyId: "", s3SecretAccessKey: "" });
+    try {
+      expect((await get(key)).status).toBe(401);
+    } finally {
+      Object.assign(ENV, configured);
+    }
+  });
+
   it("redirects an authorized admin to a signed URL", async () => {
     const response = await get(key, ownerToken);
     expect(response.status).toBe(307);

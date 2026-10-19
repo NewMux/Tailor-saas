@@ -23,6 +23,7 @@ import { assertRecentAuth, highRiskProcedure, platformProcedure, protectedProced
 import { getDb, getPlatformStaffByUserId, getUserByEmail, getUserById } from "./db";
 import { billingAccess } from "./billing/access";
 import { isBillingEnabled } from "./_core/env";
+import { adminToolsRouter } from "./admin-tools";
 
 const PLATFORM_AUDIT_ACTIONS = [
   "ORG_CREATED",
@@ -483,6 +484,7 @@ const staffRouter = router({
 });
 
 export const adminRouter = router({
+  ...adminToolsRouter._def.record,
   organizations: organizationsRouter,
   staff: staffRouter,
   impersonation: impersonationRouter,

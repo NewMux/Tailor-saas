@@ -20,6 +20,7 @@
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "auth:reset-links": "node scripts/generate-reset-links.mjs",
     "auth:revoke-sessions": "node scripts/revoke-all-sessions.mjs",
+    "security:probe": "tsx scripts/security-probe.ts",
     "platform:grant-staff": "node scripts/grant-platform-staff.mjs",
     "shop:create": "tsx scripts/create-shop.ts",
     "demo:reset": "tsx scripts/reset-demo.ts"

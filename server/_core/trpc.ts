@@ -2,7 +2,6 @@ import {
   BILLING_READ_ONLY_ERR_MSG,
   IMPERSONATION_BLOCKED_ERR_MSG,
   IMPERSONATION_READ_ONLY_ERR_MSG,
-  NOT_ADMIN_ERR_MSG,
   NOT_PLATFORM_STAFF_ERR_MSG,
   ORG_SUSPENDED_ERR_MSG,
   REAUTH_REQUIRED_ERR_MSG,
@@ -100,7 +99,7 @@ const requireOrganizationFor = (options: { enforceBilling: boolean }) => t.middl
   }
 
   // Lets audit() record the real operator without every call site passing it.
-  return requestContext.run({ impersonatedBy: ctx.impersonation?.platformStaffUserId ?? null }, () =>
+  return requestContext.run({ impersonatedBy: ctx.impersonation?.platformStaffUserId ?? null, tenantScope: true }, () =>
     next({ ctx: { ...ctx, user, organizationId } })
   );
 });
@@ -118,31 +117,6 @@ export const tenantProcedure = t.procedure.use(requireUser).use(requireOrganizat
  * customer portal and pay.
  */
 export const tenantBillingProcedure = t.procedure.use(requireUser).use(requireOrganizationFor({ enforceBilling: false }));
-
-/**
- * NOT platform-staff and NOT tenant-scoped: this only checks the legacy
- * global users.role flag, which createOrganizationWithOwner (server/db.ts)
- * sets to "admin" for every self-serve organization owner. Using this to
- * gate a platform-only feature would silently expose it to every tenant's
- * own owner. For cross-tenant/operator routes, use platformProcedure or
- * superadminProcedure instead.
- */
-export const globalUserAdminProcedure = t.procedure.use(
-  t.middleware(async opts => {
-    const { ctx, next } = opts;
-
-    if (!ctx.user || ctx.user.role !== "admin") {
-      throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
-    }
-
-    return next({
-      ctx: {
-        ...ctx,
-        user: ctx.user,
-      },
-    });
-  })
-);
 
 const requirePlatformStaff = t.middleware(async opts => {
   const { ctx, next } = opts;
