@@ -49,3 +49,16 @@ export function registerAuthRateLimits(app: Express) {
   app.post("/api/auth/reauth", authLimiter(10, { skipSuccessfulRequests: true }));
   app.get("/api/auth/invite", authLimiter(30));
 }
+
+/**
+ * Brake for the authenticated document proxy: every request costs a session
+ * and an access lookup. Generous, because a page of documents loads many files.
+ */
+export const storageRateLimit = rateLimit({
+  keyGenerator: request => clientKey(request.ip),
+  windowMs: FIFTEEN_MINUTES,
+  limit: process.env.NODE_ENV === "test" ? Number.MAX_SAFE_INTEGER : 600,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: { code: "RATE_LIMITED", message: "Too many requests. Please wait a few minutes and try again." } },
+});

@@ -14,6 +14,7 @@ import { payrollRoles, resolveAccess } from "./access";
 import { sdk } from "./sdk";
 import { isStorageConfigured, storageGetSignedUrl } from "../storage";
 import { logger } from "./logger";
+import { storageRateLimit } from "./rateLimit";
 import { captureError } from "./sentry";
 
 async function canReadStaffDocuments(userId: number, organizationId: number) {
@@ -27,7 +28,7 @@ async function canReadStaffDocuments(userId: number, organizationId: number) {
 }
 
 export function registerStorageProxy(app: Express) {
-  app.get("/manus-storage/*", async (req, res) => {
+  app.get("/manus-storage/*", storageRateLimit, async (req, res) => {
     const key = (req.params as Record<string, string>)[0];
     if (!key || key.length > 500) {
       res.status(400).send("Invalid storage key");
