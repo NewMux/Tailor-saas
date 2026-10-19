@@ -7,6 +7,7 @@ const grantStaffScript = fileURLToPath(new URL("../../scripts/grant-platform-sta
 
 const stamp = Date.now();
 const staffOwner = { name: "Staffer Owner", orgName: `Ops Staff Shop ${stamp}`, email: `ops-staff-${stamp}@example.com`, password: "password123" };
+const newOperator = { name: "New Operator", email: `ops-new-${stamp}@example.com`, password: "password123" };
 const targetOwner = { name: "Target Owner", orgName: `Ops Target Shop ${stamp}`, email: `ops-target-${stamp}@example.com`, password: "password123" };
 
 async function loginExisting(page: import("@playwright/test").Page, org: typeof staffOwner) {
@@ -90,5 +91,35 @@ test.describe.serial("superadmin ops console", () => {
 
     await page.getByRole("button", { name: "Exit impersonation" }).click();
     await expect(page.getByText("Viewing as another user")).toHaveCount(0);
+  });
+
+  test("invites a platform-only operator, who sets a password and lands in the console", async ({ page, browser }) => {
+    await loginExisting(page, staffOwner);
+    await page.goto("/ops/staff");
+    await page.locator("#invite-name").fill(newOperator.name);
+    await page.locator("#invite-email").fill(newOperator.email);
+    await page.locator("#invite-reason").fill("Joins the support rota (e2e test)");
+    await page.getByRole("button", { name: "Send invite" }).click();
+    const setupLink = await page.locator("input[readonly]").first().inputValue();
+    expect(setupLink).toContain("reset_token=");
+
+    const operatorPage = await browser.newPage();
+    await operatorPage.goto(setupLink);
+    await expect(operatorPage.getByRole("heading", { name: "Set your password" })).toBeVisible({ timeout: 15000 });
+    await operatorPage.locator("#recovery-password").fill(newOperator.password);
+    await operatorPage.locator("#recovery-confirmation").fill(newOperator.password);
+    await operatorPage.getByRole("button", { name: "Save password" }).click();
+    // No shop to land in: straight to the operator console.
+    await expect(operatorPage.getByText("Tafsell Platform Ops")).toBeVisible({ timeout: 15000 });
+    await expect(operatorPage.getByText("Back to workspace")).toHaveCount(0);
+    await operatorPage.close();
+  });
+
+  test("an operator cannot revoke their own access", async ({ page }) => {
+    await loginExisting(page, staffOwner);
+    await page.goto("/ops/staff");
+    const ownRow = page.getByRole("row").filter({ hasText: staffOwner.email });
+    await expect(ownRow.getByText("You")).toBeVisible();
+    await expect(ownRow.getByRole("button", { name: "Revoke" })).toHaveCount(0);
   });
 });

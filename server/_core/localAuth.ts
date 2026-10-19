@@ -21,10 +21,18 @@ import { passwordResetEmail } from "./emailTemplates";
 import { logger } from "./logger";
 import { appBaseUrl } from "./urls";
 import { captureError } from "./sentry";
+import { purgeOldAuthNoise, recordAuthEvent, registerLoginAttempt } from "./authEvents";
+import type { ImpersonationMode } from "./impersonationPolicy";
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Operators hold cross-tenant power, so their sessions are short. */
+export const OPERATOR_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const IMPERSONATION_TTL_MS = 60 * 60 * 1000;
+export const IMPERSONATION_WRITE_TTL_MS = 15 * 60 * 1000;
+export const OPERATOR_SETUP_TTL_MS = 24 * 60 * 60 * 1000;
+/** A password confirmation stays valid this long for high-risk operator actions. */
+export const REAUTH_WINDOW_MS = 10 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
 // A new shop owner's "set your password" link: longer than a reset link,
 // since it's handed over by email or by hand and may not be opened at once.
@@ -121,7 +129,10 @@ function publicUser(user: User) {
   return { id: user.id, name: user.name, email: user.email, role: user.role };
 }
 
-async function createSessionInternal(userId: number, opts: { impersonatedBy?: number; ttlMs?: number } = {}) {
+async function createSessionInternal(
+  userId: number,
+  opts: { impersonatedBy?: number; mode?: ImpersonationMode; ttlMs?: number } = {}
+) {
   const db = await getDb();
   if (!db)
     throw new AuthError("Database unavailable", 503, "DATABASE_UNAVAILABLE");
@@ -131,12 +142,21 @@ async function createSessionInternal(userId: number, opts: { impersonatedBy?: nu
     .where(
       and(eq(authSessions.userId, userId), lt(authSessions.expiresAt, now))
     );
+  const impersonating = opts.impersonatedBy !== undefined;
+  // Decided here, not at login, because password reset and account setup
+  // create sessions too.
+  const ttlMs =
+    opts.ttlMs ??
+    ((await getPlatformStaffByUserId(userId)) ? OPERATOR_SESSION_TTL_MS : SESSION_TTL_MS);
   const token = randomToken("local");
   await db.insert(authSessions).values({
     tokenHash: hashOpaqueToken(token),
     userId,
     impersonatedBy: opts.impersonatedBy ?? null,
-    expiresAt: new Date(now.getTime() + (opts.ttlMs ?? SESSION_TTL_MS)),
+    impersonationMode: impersonating ? (opts.mode ?? "readonly") : null,
+    // A session created from a password (login, reset, setup) counts as a fresh confirmation.
+    reauthAt: impersonating ? null : now,
+    expiresAt: new Date(now.getTime() + ttlMs),
     lastUsedAt: now,
   });
   return token;
@@ -152,8 +172,16 @@ async function createSession(userId: number) {
  * server/admin.ts's impersonation.start, which is the only place that
  * checks superadminProcedure and writes the audit trail entry.
  */
-export async function createImpersonationSession(targetUserId: number, platformStaffUserId: number) {
-  return createSessionInternal(targetUserId, { impersonatedBy: platformStaffUserId, ttlMs: IMPERSONATION_TTL_MS });
+export async function createImpersonationSession(
+  targetUserId: number,
+  platformStaffUserId: number,
+  mode: ImpersonationMode = "readonly"
+) {
+  return createSessionInternal(targetUserId, {
+    impersonatedBy: platformStaffUserId,
+    mode,
+    ttlMs: mode === "write" ? IMPERSONATION_WRITE_TTL_MS : IMPERSONATION_TTL_MS,
+  });
 }
 
 export async function revokeSession(token: string | undefined) {
@@ -198,7 +226,14 @@ export function sessionTokenFromRequest(req: Request) {
 
 export async function getUserForRequest(
   req: Request
-): Promise<{ user: User; impersonatedBy: number | null } | undefined> {
+): Promise<
+  | {
+      user: User;
+      impersonatedBy: number | null;
+      session: { id: number; createdAt: Date; reauthAt: Date | null; impersonationMode: ImpersonationMode | null };
+    }
+  | undefined
+> {
   const token = tokenFromRequest(req);
   if (!token) return undefined;
   const db = await getDb();
@@ -232,7 +267,18 @@ export async function getUserForRequest(
     .where(eq(authSessions.id, session.id));
   const user = await getUserById(session.userId);
   if (!user) return undefined;
-  return { user, impersonatedBy: session.impersonatedBy };
+  return {
+    user,
+    impersonatedBy: session.impersonatedBy,
+    session: {
+      id: session.id,
+      createdAt: session.createdAt,
+      reauthAt: session.reauthAt,
+      // A missing or unknown mode on an impersonation session means read-only.
+      impersonationMode:
+        session.impersonatedBy === null ? null : session.impersonationMode === "write" ? "write" : "readonly",
+    },
+  };
 }
 
 async function createResetToken(userId: number, ttlMs = RESET_TTL_MS) {
@@ -261,8 +307,14 @@ function resetUrl(baseUrl: string, token: string) {
  * password yet) to choose their password. It is a password-reset token with
  * a longer lifetime, so it is redeemed by the normal /api/auth/reset flow.
  */
-export async function createAccountSetupLink(userId: number, baseUrl: string) {
-  return resetUrl(baseUrl, await createResetToken(userId, ACCOUNT_SETUP_TTL_MS));
+export async function createAccountSetupLink(userId: number, baseUrl: string, ttlMs = ACCOUNT_SETUP_TTL_MS) {
+  return resetUrl(baseUrl, await createResetToken(userId, ttlMs));
+}
+
+async function touchLastSignedIn(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, userId));
 }
 
 async function register(req: Request, res: Response) {
@@ -347,6 +399,7 @@ async function register(req: Request, res: Response) {
   }
 
   const token = await createSession(user.id);
+  await touchLastSignedIn(user.id);
   setSessionCookie(res, token);
   res.status(201).json({ user: publicUser(user), token });
 }
@@ -356,12 +409,25 @@ async function login(req: Request, res: Response) {
     typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
   const password =
     typeof req.body?.password === "string" ? req.body.password : "";
+  const invalid = new AuthError(
+    "Invalid email or password.",
+    401,
+    "INVALID_CREDENTIALS"
+  );
+  // Per-account throttle: too many recent attempts look exactly like a wrong
+  // password (and still cost one scrypt), so it reveals nothing.
+  const throttle = email ? await registerLoginAttempt(email, req) : { blocked: false };
   const user = email ? await getUserByEmail(email) : undefined;
   const passwordMatches = await verifyPassword(
     password,
     user?.passwordHash ?? (await DUMMY_PASSWORD_HASH)
   );
+  if (throttle.blocked) {
+    await recordAuthEvent({ type: "login_blocked", email, userId: user?.id, req });
+    throw invalid;
+  }
   if (!user || !user.passwordHash || !passwordMatches) {
+    if (email) await recordAuthEvent({ type: "login_failed", email, userId: user?.id, req });
     if (user && !user.passwordHash) {
       throw new AuthError(
         "This account has no password yet. Use the setup link you were sent, or \"Forgot password?\".",
@@ -369,13 +435,11 @@ async function login(req: Request, res: Response) {
         "PASSWORD_RESET_REQUIRED"
       );
     }
-    throw new AuthError(
-      "Invalid email or password.",
-      401,
-      "INVALID_CREDENTIALS"
-    );
+    throw invalid;
   }
-  if (user.organizationId) {
+  // Platform staff are not locked out by their shop being suspended: that is
+  // how they would investigate or reactivate it.
+  if (user.organizationId && !(await getPlatformStaffByUserId(user.id))) {
     const organization = await getOrganizationById(user.organizationId);
     if (organization?.status === "suspended") {
       throw new AuthError(
@@ -386,6 +450,9 @@ async function login(req: Request, res: Response) {
     }
   }
   const token = await createSession(user.id);
+  await touchLastSignedIn(user.id);
+  await recordAuthEvent({ type: "login_success", email, userId: user.id, req });
+  void purgeOldAuthNoise().catch(() => undefined);
   setSessionCookie(res, token);
   res.json({ user: publicUser(user), token });
 }
@@ -396,6 +463,7 @@ async function forgotPassword(req: Request, res: Response) {
   const user = email ? await getUserByEmail(email) : undefined;
   let resetUrlValue: string | undefined;
   if (user?.email) {
+    await recordAuthEvent({ type: "reset_requested", email, userId: user.id, req });
     const token = await createResetToken(user.id);
     resetUrlValue = resetUrl(appBaseUrl(req), token);
     const { sent } = await sendEmail(passwordResetEmail(user.email, resetUrlValue));
@@ -485,11 +553,36 @@ async function resetPassword(req: Request, res: Response) {
   const user = await getUserById(reset.userId);
   if (!user) throw new AuthError("Account not found", 404, "ACCOUNT_NOT_FOUND");
   const sessionToken = await createSession(user.id);
+  await touchLastSignedIn(user.id);
+  await recordAuthEvent({ type: "reset_completed", email: user.email, userId: user.id, req });
   setSessionCookie(res, sessionToken);
   res.json({
     user: publicUser({ ...user, passwordHash }),
     token: sessionToken,
   });
+}
+
+/**
+ * Password confirmation for the current session ("sudo mode"). High-risk
+ * operator actions require it to be recent. Throttled like sign-in.
+ */
+async function reauth(req: Request, res: Response) {
+  const auth = await getUserForRequest(req);
+  if (!auth || auth.impersonatedBy !== null)
+    throw new AuthError("Please sign in again.", 401, "UNAUTHENTICATED");
+  const email = auth.user.email ?? "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const throttle = email ? await registerLoginAttempt(email, req) : { blocked: false };
+  const matches = await verifyPassword(password, auth.user.passwordHash ?? (await DUMMY_PASSWORD_HASH));
+  if (throttle.blocked || !matches || !auth.user.passwordHash) {
+    await recordAuthEvent({ type: "reauth_failed", email, userId: auth.user.id, req });
+    throw new AuthError("Invalid password.", 401, "INVALID_CREDENTIALS");
+  }
+  const db = await getDb();
+  const now = new Date();
+  await db?.update(authSessions).set({ reauthAt: now }).where(eq(authSessions.id, auth.session.id));
+  await recordAuthEvent({ type: "reauth_success", email, userId: auth.user.id, req });
+  res.json({ ok: true, reauthValidUntil: new Date(now.getTime() + REAUTH_WINDOW_MS).toISOString() });
 }
 
 function sendError(res: Response, error: unknown) {
@@ -539,6 +632,14 @@ export function registerAuthRoutes(app: Express) {
   app.post("/api/auth/reset", async (req, res) => {
     try {
       await resetPassword(req, res);
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post("/api/auth/reauth", async (req, res) => {
+    try {
+      await reauth(req, res);
     } catch (error) {
       sendError(res, error);
     }

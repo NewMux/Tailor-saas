@@ -9,6 +9,7 @@ import {
   type BusinessRole,
 } from "../../drizzle/schema";
 import { orgScope, dbOrThrow } from "../_core/tenantDb";
+import { currentImpersonator } from "../_core/requestContext";
 import { resolveAccess } from "../_core/access";
 export {
   adminRoles,
@@ -237,6 +238,7 @@ export async function audit(
   await db.insert(auditLogs).values({
     organizationId,
     actorId: userId,
+    impersonatedBy: currentImpersonator(),
     action,
     entityType,
     entityId,

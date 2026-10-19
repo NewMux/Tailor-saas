@@ -1,4 +1,5 @@
 import { adminRouter } from "./admin";
+import { REAUTH_WINDOW_MS } from "./_core/localAuth";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { getPlatformStaffByUserId, getUserById } from "./db";
@@ -33,7 +34,16 @@ const authRouter = router({
       // An impersonation session never carries the target's operator access
       // (see requirePlatformStaff), so don't advertise it either.
       isPlatformStaff: Boolean(platformStaffRow) && !ctx.impersonation,
-      impersonation: ctx.impersonation ? { by: impersonator?.name || impersonator?.email || "platform staff" } : null,
+      // Lets the console hide actions a support operator can never run.
+      platformRole: platformStaffRow && !ctx.impersonation ? platformStaffRow.role : null,
+      // Until when a recent password confirmation lets high-risk actions through.
+      reauthValidUntil: ctx.session?.reauthAt ? new Date(ctx.session.reauthAt.getTime() + REAUTH_WINDOW_MS) : null,
+      impersonation: ctx.impersonation
+        ? {
+            by: impersonator?.name || impersonator?.email || "platform staff",
+            mode: ctx.impersonation.mode === "write" ? ("write" as const) : ("readonly" as const),
+          }
+        : null,
     };
   }),
 });

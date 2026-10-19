@@ -21,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SetupLinkNotice } from "./OrganizationsList";
+import { useReauth } from "@/components/ReauthDialog";
 
 export default function OrganizationDetail() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +29,14 @@ export default function OrganizationDetail() {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const detail = trpc.admin.organizations.detail.useQuery({ organizationId }, { enabled: Number.isFinite(organizationId) });
+  const me = trpc.auth.me.useQuery();
+  const isSuperadmin = me.data?.platformRole === "superadmin";
+  const reauth = useReauth();
+  const [impersonateMode, setImpersonateMode] = useState<"readonly" | "write">("readonly");
+  // A password-confirmation request re-runs the action once confirmed; other errors are shown.
+  const fail = <V,>(retry: (variables: V) => void) => (error: { message: string }, variables: V) => {
+    if (!reauth.handleError(error, () => retry(variables))) toast.error(error.message);
+  };
 
   const [suspendDialogOpen, setSuspendDialogOpen] = useState(false);
   const [suspendReason, setSuspendReason] = useState("");
@@ -38,7 +47,7 @@ export default function OrganizationDetail() {
       utils.admin.organizations.detail.invalidate({ organizationId });
       toast.success("New setup link created");
     },
-    onError: error => toast.error(error.message),
+    onError: fail(variables => ownerSetupLink.mutate(variables)),
   });
 
   const suspend = trpc.admin.organizations.suspend.useMutation({
@@ -49,7 +58,7 @@ export default function OrganizationDetail() {
       setSuspendDialogOpen(false);
       toast.success("Organization suspended");
     },
-    onError: error => toast.error(error.message),
+    onError: fail(variables => suspend.mutate(variables)),
   });
   const reactivate = trpc.admin.organizations.reactivate.useMutation({
     onSuccess: () => {
@@ -57,7 +66,7 @@ export default function OrganizationDetail() {
       utils.admin.organizations.list.invalidate();
       toast.success("Organization reactivated");
     },
-    onError: error => toast.error(error.message),
+    onError: fail(variables => reactivate.mutate(variables)),
   });
   const [exemptReason, setExemptReason] = useState("");
   const [trialDays, setTrialDays] = useState("14");
@@ -83,10 +92,10 @@ export default function OrganizationDetail() {
   const startImpersonation = trpc.admin.impersonation.start.useMutation({
     onSuccess: result => {
       authApi.beginImpersonation(result.token);
-      toast.success(`Now viewing as ${result.target.name || result.target.email}`);
+      toast.success(`Now viewing as ${result.target.name || result.target.email} (${result.mode === "write" ? "write access" : "read-only"})`);
       navigate("/");
     },
-    onError: error => toast.error(error.message),
+    onError: fail(variables => startImpersonation.mutate(variables)),
   });
 
   if (!Number.isFinite(organizationId)) return <p className="text-sm text-muted-foreground">Invalid organization.</p>;
@@ -109,7 +118,7 @@ export default function OrganizationDetail() {
         </div>
       </div>
 
-      <div className="rounded-xl border bg-white p-4">
+      {isSuperadmin && <div className="rounded-xl border bg-white p-4">
         {isSuspended ? (
           <Button disabled={reactivate.isPending} onClick={() => reactivate.mutate({ organizationId })}>Reactivate organization</Button>
         ) : (
@@ -137,7 +146,7 @@ export default function OrganizationDetail() {
             </AlertDialogContent>
           </AlertDialog>
         )}
-      </div>
+      </div>}
 
       <div className="rounded-xl border bg-white">
         <div className="border-b px-4 py-3"><h2 className="text-sm font-semibold">Billing</h2></div>
@@ -148,7 +157,7 @@ export default function OrganizationDetail() {
             <div><dt className="text-muted-foreground">Paid through</dt><dd className="font-medium">{organization.currentPeriodEndsAt ? new Date(organization.currentPeriodEndsAt).toLocaleDateString() : "—"}</dd></div>
             <div className="sm:col-span-3"><dt className="text-muted-foreground">Paddle</dt><dd className="break-all font-mono text-xs">{organization.paddleCustomerId ?? "no customer"} · {organization.paddleSubscriptionId ?? "no subscription"}</dd></div>
           </dl>
-          <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end">
+          {isSuperadmin && <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end">
             <div className="flex-1 space-y-1.5">
               <label className="text-xs text-muted-foreground" htmlFor="exempt-reason">Reason (required to change exemption)</label>
               <Input id="exempt-reason" value={exemptReason} onChange={event => setExemptReason(event.target.value)} maxLength={300} placeholder="e.g. Partner shop, invoiced manually" />
@@ -160,8 +169,8 @@ export default function OrganizationDetail() {
             >
               {organization.billingExempt ? "Remove exemption" : "Make billing-exempt"}
             </Button>
-          </div>
-          {organization.subscriptionStatus !== "active" && (
+          </div>}
+          {isSuperadmin && organization.subscriptionStatus !== "active" && (
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground" htmlFor="trial-days">Extend trial by (days)</label>
@@ -209,7 +218,7 @@ export default function OrganizationDetail() {
                   ) : (
                     <div className="space-y-1">
                       <Badge variant="outline">Setup pending</Badge>
-                      {orgUser.id === organization.ownerId && (
+                      {isSuperadmin && orgUser.id === organization.ownerId && (
                         <Button
                           size="sm"
                           variant="link"
@@ -225,7 +234,7 @@ export default function OrganizationDetail() {
                 </TableCell>
                 <TableCell>{orgUser.lastSignedIn ? new Date(orgUser.lastSignedIn).toLocaleString() : "—"}</TableCell>
                 <TableCell>
-                  <AlertDialog open={impersonatingUserId === orgUser.id} onOpenChange={open => { setImpersonatingUserId(open ? orgUser.id : null); if (!open) setImpersonateReason(""); }}>
+                  {isSuperadmin && <AlertDialog open={impersonatingUserId === orgUser.id} onOpenChange={open => { setImpersonatingUserId(open ? orgUser.id : null); if (!open) { setImpersonateReason(""); setImpersonateMode("readonly"); } }}>
                     <AlertDialogTrigger asChild>
                       <Button size="sm" variant="outline">Impersonate</Button>
                     </AlertDialogTrigger>
@@ -233,21 +242,25 @@ export default function OrganizationDetail() {
                       <AlertDialogHeader>
                         <AlertDialogTitle>Impersonate {orgUser.name || orgUser.email}?</AlertDialogTitle>
                         <AlertDialogDescription>
-                          You'll act as this user for up to an hour. This is logged to the organization's audit trail.
+                          You'll see the workspace as this user. Read-only sessions last up to an hour; write sessions last 15 minutes and allow only data fixes (customers, tailoring, inventory, services), never staff, roles or billing. Everything is logged to the organization's audit trail with your name.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
+                      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Session type">
+                        <Button type="button" role="radio" aria-checked={impersonateMode === "readonly"} variant={impersonateMode === "readonly" ? "default" : "outline"} onClick={() => setImpersonateMode("readonly")}>Read-only</Button>
+                        <Button type="button" role="radio" aria-checked={impersonateMode === "write"} variant={impersonateMode === "write" ? "default" : "outline"} onClick={() => setImpersonateMode("write")}>Write (15 min)</Button>
+                      </div>
                       <Textarea value={impersonateReason} onChange={event => setImpersonateReason(event.target.value)} placeholder="Reason (required)" maxLength={300} />
                       <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           disabled={impersonateReason.trim().length < 3 || startImpersonation.isPending}
-                          onClick={() => startImpersonation.mutate({ userId: orgUser.id, reason: impersonateReason.trim() })}
+                          onClick={() => startImpersonation.mutate({ userId: orgUser.id, reason: impersonateReason.trim(), mode: impersonateMode })}
                         >
                           Start impersonation
                         </AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>
-                  </AlertDialog>
+                  </AlertDialog>}
                 </TableCell>
               </TableRow>
             ))}

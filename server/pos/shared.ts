@@ -13,6 +13,7 @@ import {
   userCustomRoles,
 } from "../../drizzle/schema";
 import { orgScope, dbOrThrow } from "../_core/tenantDb";
+import { currentImpersonator } from "../_core/requestContext";
 import { resolveAccess, salesRoles } from "../_core/access";
 export { dbOrThrow };
 
@@ -126,6 +127,7 @@ export async function audit(
   await db.insert(auditLogs).values({
     organizationId,
     actorId: userId,
+    impersonatedBy: currentImpersonator(),
     action,
     entityType,
     entityId,

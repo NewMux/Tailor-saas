@@ -1,11 +1,25 @@
+import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { auditLogs, authSessions, organizations, platformStaff, users } from "../drizzle/schema";
-import { createAccountSetupLink, createImpersonationSession, endImpersonationSession, IMPERSONATION_TTL_MS, revokeImpersonationSessionsBy, sessionTokenFromRequest } from "./_core/localAuth";
+import {
+  createAccountSetupLink,
+  createImpersonationSession,
+  endImpersonationSession,
+  IMPERSONATION_TTL_MS,
+  IMPERSONATION_WRITE_TTL_MS,
+  OPERATOR_SETUP_TTL_MS,
+  revokeAllSessionsForUser,
+  revokeImpersonationSessionsBy,
+  sessionTokenFromRequest,
+} from "./_core/localAuth";
+import { platformAudit } from "./_core/platformAudit";
+import { sendEmail } from "./_core/email";
+import { operatorInviteEmail } from "./_core/emailTemplates";
 import { createShopWithOwner, ShopOnboardingError } from "./_core/shopOnboarding";
 import { appBaseUrl } from "./_core/urls";
-import { platformProcedure, protectedProcedure, router, superadminProcedure } from "./_core/trpc";
+import { assertRecentAuth, highRiskProcedure, platformProcedure, protectedProcedure, router, superadminProcedure } from "./_core/trpc";
 import { getDb, getPlatformStaffByUserId, getUserByEmail, getUserById } from "./db";
 import { billingAccess } from "./billing/access";
 import { isBillingEnabled } from "./_core/env";
@@ -20,6 +34,9 @@ const PLATFORM_AUDIT_ACTIONS = [
   "BILLING_EXEMPT_SET",
   "BILLING_TRIAL_EXTENDED",
 ] as const;
+
+type Db = Awaited<ReturnType<typeof dbOrThrow>>;
+const reasonInput = z.string().trim().min(3).max(300);
 
 /** Billing state as shown in the ops console, e.g. "trialing", "trial_expired", "exempt". */
 function planStatus(organization: Parameters<typeof billingAccess>[0]) {
@@ -54,8 +71,17 @@ async function audit(organizationId: number, actorId: number, action: string, en
 
 const impersonationRouter = router({
   start: superadminProcedure
-    .input(z.object({ userId: z.number().int().positive(), reason: z.string().trim().min(3).max(300) }))
+    .input(
+      z.object({
+        userId: z.number().int().positive(),
+        reason: z.string().trim().min(3).max(300),
+        // Read-only unless the operator explicitly asks to change things.
+        mode: z.enum(["readonly", "write"]).default("readonly"),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
+      // Changing a shop's data as one of its users needs a fresh password confirmation.
+      if (input.mode === "write") assertRecentAuth(ctx);
       const targetUser = await getUserById(input.userId);
       if (!targetUser || !targetUser.organizationId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "That user does not belong to an organization." });
@@ -66,15 +92,26 @@ const impersonationRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Platform staff accounts cannot be impersonated." });
       }
 
-      const token = await createImpersonationSession(targetUser.id, ctx.user.id);
+      const token = await createImpersonationSession(targetUser.id, ctx.user.id, input.mode);
       await audit(targetUser.organizationId, ctx.user.id, "IMPERSONATION_STARTED", "user", targetUser.id, {
         reason: input.reason,
+        mode: input.mode,
         platformStaffEmail: ctx.user.email,
+      });
+      await platformAudit({
+        actor: ctx.user,
+        action: "IMPERSONATION_STARTED",
+        targetType: "user",
+        targetId: targetUser.id,
+        organizationId: targetUser.organizationId,
+        details: { reason: input.reason, mode: input.mode },
+        req: ctx.req,
       });
 
       return {
         token,
-        expiresInMs: IMPERSONATION_TTL_MS,
+        mode: input.mode,
+        expiresInMs: input.mode === "write" ? IMPERSONATION_WRITE_TTL_MS : IMPERSONATION_TTL_MS,
         target: { id: targetUser.id, name: targetUser.name, email: targetUser.email, organizationId: targetUser.organizationId },
       };
     }),
@@ -185,7 +222,7 @@ const organizationsRouter = router({
   // Re-issues the owner's setup link (e.g. it expired before they used it).
   // Only while they have no password: once they do, "Forgot password?" is
   // the way back in, and staff must not be able to take over the account.
-  ownerSetupLink: superadminProcedure
+  ownerSetupLink: highRiskProcedure
     .input(z.object({ organizationId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = await dbOrThrow();
@@ -198,10 +235,11 @@ const organizationsRouter = router({
       }
       const setupUrl = await createAccountSetupLink(owner.id, appBaseUrl(ctx.req));
       await audit(organization.id, ctx.user.id, "OWNER_SETUP_LINK_CREATED", "user", owner.id);
+      await platformAudit({ actor: ctx.user, action: "OWNER_SETUP_LINK_CREATED", targetType: "user", targetId: owner.id, organizationId: organization.id, req: ctx.req });
       return { setupUrl };
     }),
 
-  suspend: superadminProcedure
+  suspend: highRiskProcedure
     .input(z.object({ organizationId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
     .mutation(async ({ ctx, input }) => {
       const db = await dbOrThrow();
@@ -220,10 +258,11 @@ const organizationsRouter = router({
       }
 
       await audit(organization.id, ctx.user.id, "ORG_SUSPENDED", "organization", organization.id, { reason: input.reason });
+      await platformAudit({ actor: ctx.user, action: "ORG_SUSPENDED", targetType: "organization", targetId: organization.id, organizationId: organization.id, details: { reason: input.reason }, req: ctx.req });
       return organization;
     }),
 
-  reactivate: superadminProcedure
+  reactivate: highRiskProcedure
     .input(z.object({ organizationId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = await dbOrThrow();
@@ -235,6 +274,7 @@ const organizationsRouter = router({
       if (!organization) throw new TRPCError({ code: "NOT_FOUND", message: "Organization not found." });
 
       await audit(organization.id, ctx.user.id, "ORG_REACTIVATED", "organization", organization.id);
+      await platformAudit({ actor: ctx.user, action: "ORG_REACTIVATED", targetType: "organization", targetId: organization.id, organizationId: organization.id, req: ctx.req });
       return organization;
     }),
 
@@ -282,6 +322,29 @@ const organizationsRouter = router({
     }),
 });
 
+/**
+ * Platform staff changes must never leave the platform without a working
+ * superadmin: only accounts that have set a password and are active count.
+ * Runs inside the caller's transaction and locks the superadmin rows.
+ */
+export async function assertAnotherSuperadminRemains(tx: Db, removingUserId: number) {
+  const rows = await tx
+    .select({ userId: platformStaff.userId })
+    .from(platformStaff)
+    .innerJoin(users, eq(users.id, platformStaff.userId))
+    .where(and(eq(platformStaff.role, "superadmin"), eq(platformStaff.isActive, true), isNotNull(users.passwordHash)))
+    .for("update", { of: platformStaff });
+  if (rows.every(row => row.userId === removingUserId)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "At least one active superadmin with a password must remain." });
+  }
+}
+
+function refuseSelf(ctx: { user: { id: number } }, userId: number, what: string) {
+  if (ctx.user.id === userId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `You cannot ${what} your own platform access. Ask another superadmin.` });
+  }
+}
+
 const staffRouter = router({
   list: superadminProcedure.query(async () => {
     const db = await dbOrThrow();
@@ -293,6 +356,7 @@ const staffRouter = router({
         isActive: platformStaff.isActive,
         name: users.name,
         email: users.email,
+        hasPassword: sql<boolean>`${users.passwordHash} is not null`,
         createdAt: platformStaff.createdAt,
       })
       .from(platformStaff)
@@ -300,33 +364,120 @@ const staffRouter = router({
       .orderBy(desc(platformStaff.createdAt));
   }),
 
-  grant: superadminProcedure
-    .input(z.object({ email: z.string().trim().toLowerCase().email(), role: z.enum(["support", "superadmin"]) }))
+  // Adds a teammate who has no account yet: a platform-only user (no shop)
+  // with a one-time setup link, emailed when email is configured.
+  invite: highRiskProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(2).max(160),
+        email: z.string().trim().toLowerCase().email().max(320),
+        role: z.enum(["support", "superadmin"]),
+        reason: reasonInput,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (await getUserByEmail(input.email)) {
+        throw new TRPCError({ code: "CONFLICT", message: "An account already exists for that email. Use \"Grant access\" instead." });
+      }
+      const db = await dbOrThrow();
+      const [user] = await db
+        .insert(users)
+        .values({ openId: `local_${randomUUID()}`, name: input.name, email: input.email, passwordHash: null, loginMethod: "local", role: "user" })
+        .returning();
+      if (!user) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Unable to create the account." });
+      await db.insert(platformStaff).values({ userId: user.id, role: input.role, isActive: true, grantedBy: ctx.user.id });
+      const setupUrl = await createAccountSetupLink(user.id, appBaseUrl(ctx.req), OPERATOR_SETUP_TTL_MS);
+      const { sent } = await sendEmail(operatorInviteEmail(input.email, { name: input.name, setupUrl }));
+      await platformAudit({
+        actor: ctx.user,
+        action: "STAFF_INVITED",
+        targetType: "user",
+        targetId: user.id,
+        details: { email: input.email, role: input.role, reason: input.reason, emailed: sent },
+        req: ctx.req,
+      });
+      return { userId: user.id, setupUrl, emailed: sent };
+    }),
+
+  // Grants access to someone who already has a working account.
+  grant: highRiskProcedure
+    .input(z.object({ email: z.string().trim().toLowerCase().email(), role: z.enum(["support", "superadmin"]), reason: reasonInput }))
     .mutation(async ({ ctx, input }) => {
       const target = await getUserByEmail(input.email);
       if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "No account found for that email." });
-
+      refuseSelf(ctx, target.id, "change");
+      if (!target.passwordHash) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That account has not set a password yet. Invite them instead." });
+      }
       const db = await dbOrThrow();
+      const [existing] = await db.select().from(platformStaff).where(eq(platformStaff.userId, target.id)).limit(1);
+      if (existing?.isActive) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That person already has platform access. Change their role instead." });
+      }
       await db
         .insert(platformStaff)
         .values({ userId: target.id, role: input.role, isActive: true, grantedBy: ctx.user.id })
-        .onConflictDoUpdate({ target: platformStaff.userId, set: { role: input.role, isActive: true, updatedAt: new Date() } });
-
+        .onConflictDoUpdate({ target: platformStaff.userId, set: { role: input.role, isActive: true, grantedBy: ctx.user.id, updatedAt: new Date() } });
+      // Existing long-lived sessions must not outlive the move to operator rules.
+      await revokeAllSessionsForUser(target.id);
+      await platformAudit({
+        actor: ctx.user,
+        action: "STAFF_GRANTED",
+        targetType: "user",
+        targetId: target.id,
+        details: { email: target.email, role: input.role, reason: input.reason },
+        req: ctx.req,
+      });
       return { ok: true } as const;
     }),
 
-  revoke: superadminProcedure
-    .input(z.object({ userId: z.number().int().positive() }))
-    .mutation(async ({ input }) => {
+  setRole: highRiskProcedure
+    .input(z.object({ userId: z.number().int().positive(), role: z.enum(["support", "superadmin"]), reason: reasonInput }))
+    .mutation(async ({ ctx, input }) => {
+      refuseSelf(ctx, input.userId, "change");
       const db = await dbOrThrow();
-      const [updated] = await db
-        .update(platformStaff)
-        .set({ isActive: false, updatedAt: new Date() })
-        .where(eq(platformStaff.userId, input.userId))
-        .returning();
-      if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "That user is not platform staff." });
-      await revokeImpersonationSessionsBy(input.userId);
+      const previous = await db.transaction(async tx => {
+        const [row] = await tx.select().from(platformStaff).where(eq(platformStaff.userId, input.userId)).for("update").limit(1);
+        if (!row?.isActive) throw new TRPCError({ code: "NOT_FOUND", message: "That user is not active platform staff." });
+        if (row.role === "superadmin" && input.role !== "superadmin") {
+          await assertAnotherSuperadminRemains(tx as unknown as Db, input.userId);
+        }
+        await tx.update(platformStaff).set({ role: input.role, updatedAt: new Date() }).where(eq(platformStaff.userId, input.userId));
+        return row.role;
+      });
+      await revokeAllSessionsForUser(input.userId);
+      await platformAudit({
+        actor: ctx.user,
+        action: "STAFF_ROLE_CHANGED",
+        targetType: "user",
+        targetId: input.userId,
+        details: { from: previous, to: input.role, reason: input.reason },
+        req: ctx.req,
+      });
+      return { ok: true } as const;
+    }),
 
+  revoke: highRiskProcedure
+    .input(z.object({ userId: z.number().int().positive(), reason: reasonInput }))
+    .mutation(async ({ ctx, input }) => {
+      refuseSelf(ctx, input.userId, "remove");
+      const db = await dbOrThrow();
+      await db.transaction(async tx => {
+        const [row] = await tx.select().from(platformStaff).where(eq(platformStaff.userId, input.userId)).for("update").limit(1);
+        if (!row?.isActive) throw new TRPCError({ code: "NOT_FOUND", message: "That user is not active platform staff." });
+        if (row.role === "superadmin") await assertAnotherSuperadminRemains(tx as unknown as Db, input.userId);
+        await tx.update(platformStaff).set({ isActive: false, updatedAt: new Date() }).where(eq(platformStaff.userId, input.userId));
+      });
+      await revokeImpersonationSessionsBy(input.userId);
+      await revokeAllSessionsForUser(input.userId);
+      await platformAudit({
+        actor: ctx.user,
+        action: "STAFF_REVOKED",
+        targetType: "user",
+        targetId: input.userId,
+        details: { reason: input.reason },
+        req: ctx.req,
+      });
       return { ok: true } as const;
     }),
 });

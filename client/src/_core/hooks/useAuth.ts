@@ -5,7 +5,7 @@ import { clearOfflineSnapshots } from "@/lib/offlineSalesQueue";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type CachedUser = { id: number; name: string | null; email: string | null; role: "user" | "admin"; organizationId?: number | null; impersonation?: { by: string } | null; isPlatformStaff?: boolean };
+type CachedUser = { id: number; name: string | null; email: string | null; role: "user" | "admin"; organizationId?: number | null; impersonation?: { by: string; mode?: "readonly" | "write" } | null; isPlatformStaff?: boolean; platformRole?: "support" | "superadmin" | null };
 const CACHED_USER_KEY = "al-hussam-erp-last-user";
 
 function readCachedUser(): CachedUser | null {

@@ -6,9 +6,10 @@
  */
 import { and, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
-import { authSessions, organizations, platformStaff } from "../drizzle/schema";
+import { authSessions, organizations, platformAuditLogs, platformStaff, users } from "../drizzle/schema";
 import { adminRouter } from "./admin";
 import { createOrganizationWithOwner, getDb } from "./db";
+import { operatorContext } from "./testing/contexts";
 import { erpRouter } from "./erp";
 import type { TrpcContext } from "./_core/context";
 
@@ -62,7 +63,7 @@ describeIfDb("admin router (real Postgres)", () => {
   });
 
   it("lists organizations across tenants, for both support and superadmin roles, without leaking into erpRouter", async () => {
-    const superadminList = await adminRouter.createCaller(contextFor(orgA.user)).organizations.list();
+    const superadminList = await adminRouter.createCaller(operatorContext(orgA.user)).organizations.list();
     const ids = superadminList.map(row => row.id);
     expect(ids).toContain(orgA.organization.id);
     expect(ids).toContain(orgB.organization.id);
@@ -91,39 +92,45 @@ describeIfDb("admin router (real Postgres)", () => {
     await db!.insert(authSessions).values({ tokenHash: `test-hash-${stamp}`, userId: orgB.user.id, expiresAt: new Date(Date.now() + 60_000) });
 
     const suspended = await adminRouter
-      .createCaller(contextFor(orgA.user))
+      .createCaller(operatorContext(orgA.user))
       .organizations.suspend({ organizationId: orgB.organization.id, reason: "Nonpayment (test)" });
     expect(suspended.status).toBe("suspended");
 
     const [sessionRow] = await db!.select().from(authSessions).where(eq(authSessions.userId, orgB.user.id));
     expect(sessionRow).toBeUndefined();
 
-    const detail = await adminRouter.createCaller(contextFor(orgA.user)).organizations.detail({ organizationId: orgB.organization.id });
+    const detail = await adminRouter.createCaller(operatorContext(orgA.user)).organizations.detail({ organizationId: orgB.organization.id });
     expect(detail.recentAuditLogs.some(row => row.action === "ORG_SUSPENDED")).toBe(true);
 
-    const reactivated = await adminRouter.createCaller(contextFor(orgA.user)).organizations.reactivate({ organizationId: orgB.organization.id });
+    const reactivated = await adminRouter.createCaller(operatorContext(orgA.user)).organizations.reactivate({ organizationId: orgB.organization.id });
     expect(reactivated.status).toBe("active");
 
     const [row] = await db!.select().from(organizations).where(eq(organizations.id, orgB.organization.id));
     expect(row.status).toBe("active");
   });
 
-  it("grants and revokes platform staff access by email", async () => {
-    const caller = adminRouter.createCaller(contextFor(orgA.user));
-    await caller.staff.grant({ email: orgB.user.email!, role: "support" });
+  it("grants and revokes platform staff access by email, writing a platform audit entry for each", async () => {
+    const db = await getDb();
+    // Only accounts that have finished setting a password can be granted access.
+    await db!.update(users).set({ passwordHash: "$scrypt$test$test" }).where(eq(users.id, orgB.user.id));
+    const caller = adminRouter.createCaller(operatorContext(orgA.user));
+    await caller.staff.grant({ email: orgB.user.email!, role: "support", reason: "Joining support (test)" });
 
     let list = await caller.staff.list();
     let granted = list.find(row => row.userId === orgB.user.id);
     expect(granted?.role).toBe("support");
     expect(granted?.isActive).toBe(true);
 
-    await caller.staff.revoke({ userId: orgB.user.id });
+    await caller.staff.revoke({ userId: orgB.user.id, reason: "Leaving (test)" });
     list = await caller.staff.list();
     granted = list.find(row => row.userId === orgB.user.id);
     expect(granted?.isActive).toBe(false);
 
-    const db = await getDb();
     const [row] = await db!.select().from(platformStaff).where(and(eq(platformStaff.userId, orgB.user.id), eq(platformStaff.isActive, false)));
     expect(row).toBeDefined();
+
+    const trail = await db!.select().from(platformAuditLogs).where(and(eq(platformAuditLogs.targetId, orgB.user.id), eq(platformAuditLogs.targetType, "user")));
+    expect(trail.map(entry => entry.action)).toEqual(expect.arrayContaining(["STAFF_GRANTED", "STAFF_REVOKED"]));
+    expect(trail.every(entry => entry.actorId === orgA.user.id)).toBe(true);
   });
 });

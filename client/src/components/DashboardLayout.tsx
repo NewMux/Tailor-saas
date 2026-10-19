@@ -72,7 +72,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const impersonating = Boolean(user?.impersonation);
 
   return <>
-    {user?.impersonation && <ImpersonationBanner startedBy={user.impersonation.by} />}
+    {user?.impersonation && <ImpersonationBanner startedBy={user.impersonation.by} mode={user.impersonation.mode} />}
     <div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"} ${impersonating ? "pt-10" : ""}`}>
     <aside className={`fixed ${impersonating ? "top-10 bottom-0" : "inset-y-0"} hidden w-64 bg-white p-4 lg:block ${isArabic ? "right-0 border-l" : "left-0 border-r"}`}>
       <div className="flex items-center gap-3 px-3 py-4">

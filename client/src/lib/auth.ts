@@ -7,7 +7,7 @@ type AuthErrorPayload = { error?: { message?: string; code?: string } };
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const TOKEN_KEY = "erp_local_session";
-const IMPERSONATOR_TOKEN_KEY = "erp_impersonator_session";
+const IMPERSONATION_TOKEN_KEY = "erp_impersonation_session";
 
 function apiUrl(path: string) {
   return `${API_BASE_URL}${path}`;
@@ -32,8 +32,26 @@ function writeStorageItem(key: string, value: string | null) {
   }
 }
 
+/** The impersonation token is per tab (sessionStorage); the operator's own token stays where it was. */
+function readSessionItem(key: string) {
+  try {
+    return typeof window === "undefined" ? null : window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionItem(key: string, value: string | null) {
+  try {
+    if (value) window.sessionStorage.setItem(key, value);
+    else window.sessionStorage.removeItem(key);
+  } catch {
+    // Without sessionStorage, impersonation simply is not available.
+  }
+}
+
 function readToken() {
-  return readStorageItem(TOKEN_KEY);
+  return readSessionItem(IMPERSONATION_TOKEN_KEY) ?? readStorageItem(TOKEN_KEY);
 }
 
 function writeToken(token: string | null) {
@@ -82,9 +100,19 @@ export const authApi = {
     return remember(await request<AuthResponse>("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, password }) }));
   },
   async logout() {
+    // Signing out ends every session this browser holds, including the
+    // operator's own one behind an impersonation tab.
+    const tokens = [readSessionItem(IMPERSONATION_TOKEN_KEY), readStorageItem(TOKEN_KEY)].filter((token): token is string => Boolean(token));
     try {
-      await request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+      for (const token of tokens.length ? tokens : [undefined]) {
+        await fetch(apiUrl("/api/auth/logout"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          credentials: "include",
+        }).catch(() => undefined);
+      }
     } finally {
+      writeSessionItem(IMPERSONATION_TOKEN_KEY, null);
       writeToken(null);
       clearOrgSuspended();
       window.dispatchEvent(new Event("auth-changed"));
@@ -96,19 +124,19 @@ export const authApi = {
   clearToken() {
     writeToken(null);
   },
-  /** Swaps the active session to an impersonation token, stashing the platform staff member's own token to restore later. */
+  /** Confirms the password for the current session; high-risk operator actions require it to be recent. */
+  async reauth(password: string) {
+    return request<{ ok: boolean; reauthValidUntil: string }>("/api/auth/reauth", { method: "POST", body: JSON.stringify({ password }) });
+  },
+  /** Uses an impersonation token in this tab only. The operator's own session is left untouched. */
   beginImpersonation(token: string) {
-    const own = readToken();
-    if (own) writeStorageItem(IMPERSONATOR_TOKEN_KEY, own);
-    writeToken(token);
+    writeSessionItem(IMPERSONATION_TOKEN_KEY, token);
     clearOrgSuspended();
     window.dispatchEvent(new Event("auth-changed"));
   },
-  /** Restores the platform staff member's own session after impersonation ends. Purely local - callers must end the session server-side first. */
+  /** Drops the impersonation token; the operator's own session is still in place. Callers end the session server-side first. */
   endImpersonation() {
-    const own = readStorageItem(IMPERSONATOR_TOKEN_KEY);
-    writeToken(own);
-    writeStorageItem(IMPERSONATOR_TOKEN_KEY, null);
+    writeSessionItem(IMPERSONATION_TOKEN_KEY, null);
     clearOrgSuspended();
     window.dispatchEvent(new Event("auth-changed"));
   },

@@ -1,4 +1,4 @@
-import { boolean, date, decimal, integer, jsonb, pgEnum, pgTable, serial, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, date, decimal, index, integer, jsonb, pgEnum, pgTable, serial, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
 export const organizationStatusEnum = pgEnum("organization_status", ["active", "suspended"]);
@@ -83,7 +83,7 @@ export const staffDocuments = pgTable("staffDocuments", { id: serial("id").prima
 export const attendance = pgTable("attendance", { id: serial("id").primaryKey(), organizationId: integer("organizationId").notNull().references(() => organizations.id), staffProfileId: integer("staffProfileId").notNull(), workDate: date("workDate", { mode: "date" }).notNull(), status: attendanceStatusEnum("status").notNull(), absenceReason: varchar("absenceReason", { length: 40 }), absenceDetails: text("absenceDetails"), absenceDocumentId: integer("absenceDocumentId"), absenceDeduction: decimal("absenceDeduction", { precision: 12, scale: 3 }).notNull().default("0"), notes: text("notes"), recordedBy: integer("recordedBy").notNull(), createdAt: timestamp("createdAt").defaultNow().notNull() });
 export const performanceRecords = pgTable("performanceRecords", { id: serial("id").primaryKey(), organizationId: integer("organizationId").notNull().references(() => organizations.id), staffProfileId: integer("staffProfileId").notNull(), workDate: date("workDate", { mode: "date" }).notNull(), metric: varchar("metric", { length: 120 }).notNull(), units: decimal("units", { precision: 12, scale: 3 }).notNull(), commissionEarned: decimal("commissionEarned", { precision: 12, scale: 3 }).notNull().default("0"), notes: text("notes"), recordedBy: integer("recordedBy").notNull(), createdAt: timestamp("createdAt").defaultNow().notNull() });
 export const salaryPayouts = pgTable("salaryPayouts", { id: serial("id").primaryKey(), organizationId: integer("organizationId").notNull().references(() => organizations.id), staffProfileId: integer("staffProfileId").notNull(), payPeriod: varchar("payPeriod", { length: 20 }).notNull(), payslipNumber: varchar("payslipNumber", { length: 60 }), baseSalary: decimal("baseSalary", { precision: 12, scale: 3 }).notNull(), allowances: decimal("allowances", { precision: 12, scale: 3 }).notNull().default("0"), overtime: decimal("overtime", { precision: 12, scale: 3 }).notNull().default("0"), performanceBonus: decimal("performanceBonus", { precision: 12, scale: 3 }).notNull().default("0"), deductions: decimal("deductions", { precision: 12, scale: 3 }).notNull().default("0"), deductionDetails: text("deductionDetails"), netSalary: decimal("netSalary", { precision: 12, scale: 3 }).notNull(), notes: text("notes"), approvedBy: integer("approvedBy").notNull(), paidAt: timestamp("paidAt").defaultNow().notNull() });
-export const auditLogs = pgTable("auditLogs", { id: serial("id").primaryKey(), organizationId: integer("organizationId").notNull().references(() => organizations.id), actorId: integer("actorId").notNull(), action: varchar("action", { length: 100 }).notNull(), entityType: varchar("entityType", { length: 80 }).notNull(), entityId: integer("entityId"), detailsJson: text("detailsJson"), createdAt: timestamp("createdAt").defaultNow().notNull() });
+export const auditLogs = pgTable("auditLogs", { id: serial("id").primaryKey(), organizationId: integer("organizationId").notNull().references(() => organizations.id), actorId: integer("actorId").notNull(), action: varchar("action", { length: 100 }).notNull(), entityType: varchar("entityType", { length: 80 }).notNull(), entityId: integer("entityId"), detailsJson: text("detailsJson"), impersonatedBy: integer("impersonatedBy"), createdAt: timestamp("createdAt").defaultNow().notNull() });
 
 
 export const authSessions = pgTable("authSessions", {
@@ -94,6 +94,10 @@ export const authSessions = pgTable("authSessions", {
   // IMPERSONATION_TTL_MS in server/_core/localAuth.ts) - null for an
   // ordinary session. References the platform staff member's own userId.
   impersonatedBy: integer("impersonatedBy").references(() => users.id),
+  // "readonly" | "write" for impersonation sessions (null otherwise).
+  impersonationMode: varchar("impersonationMode", { length: 10 }),
+  // When the user last proved their password; high-risk operator actions need it to be recent.
+  reauthAt: timestamp("reauthAt"),
   expiresAt: timestamp("expiresAt").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   lastUsedAt: timestamp("lastUsedAt").defaultNow().notNull(),
@@ -134,3 +138,44 @@ export const paddleWebhookEvents = pgTable("paddleWebhookEvents", {
   eventType: varchar("eventType", { length: 80 }).notNull(),
   receivedAt: timestamp("receivedAt").defaultNow().notNull(),
 });
+
+// Operator actions that are not scoped to one shop (staff changes, session
+// revocation, CLI grants). Shop-related operator actions are also written to
+// the shop's own auditLogs so the shop can see them.
+export const platformAuditLogs = pgTable("platformAuditLogs", {
+  id: serial("id").primaryKey(),
+  actorId: integer("actorId"), // null for CLI scripts
+  actorEmail: varchar("actorEmail", { length: 320 }),
+  action: varchar("action", { length: 100 }).notNull(),
+  targetType: varchar("targetType", { length: 80 }).notNull(),
+  targetId: integer("targetId"),
+  organizationId: integer("organizationId"),
+  detailsJson: text("detailsJson"),
+  source: varchar("source", { length: 20 }).notNull().default("app"),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({
+  createdAtIdx: index("platformAuditLogs_createdAt_idx").on(table.createdAt),
+  organizationIdIdx: index("platformAuditLogs_organizationId_idx").on(table.organizationId),
+}));
+export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
+
+// Sign-in and credential events, used for per-account lockout and review.
+// emailHash is a SHA-256 of the lower-cased address so unknown addresses can
+// be throttled without storing them.
+export const authEvents = pgTable("authEvents", {
+  id: serial("id").primaryKey(),
+  type: varchar("type", { length: 40 }).notNull(),
+  userId: integer("userId"),
+  emailHash: varchar("emailHash", { length: 64 }),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+  detailsJson: text("detailsJson"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({
+  emailIdx: index("authEvents_emailHash_createdAt_idx").on(table.emailHash, table.createdAt),
+  ipIdx: index("authEvents_ip_createdAt_idx").on(table.ip, table.createdAt),
+  userIdx: index("authEvents_userId_createdAt_idx").on(table.userId, table.createdAt),
+}));
+export type AuthEvent = typeof authEvents.$inferSelect;

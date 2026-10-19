@@ -113,3 +113,23 @@ export function shopSetupEmail(
   );
   return { to, subject: `Your ${PRODUCT_NAME} workspace for ${input.shopName} is ready`, html, text };
 }
+
+export function operatorInviteEmail(to: string, details: { name: string; setupUrl: string }): EmailMessage {
+  const { html, text } = layout(
+    {
+      heading: `You've been added to the ${PRODUCT_NAME} operations team`,
+      body: [
+        `Hi ${details.name}, you now have operator access to ${PRODUCT_NAME}. Choose a password to finish setting up your account. This link works once and expires in 24 hours.`,
+      ],
+      button: { label: "Set your password", url: details.setupUrl },
+      footnote: "If you weren't expecting this, you can ignore this email.",
+    },
+    {
+      heading: `تمت إضافتك إلى فريق عمليات ${PRODUCT_NAME}`,
+      body: [`مرحبًا ${details.name}، أصبح لديك وصول تشغيلي إلى ${PRODUCT_NAME}. اختر كلمة مرور لإكمال إعداد حسابك. يعمل هذا الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة.`],
+      button: { label: "تعيين كلمة المرور", url: details.setupUrl },
+      footnote: "إذا لم تكن تتوقع هذه الرسالة، يمكنك تجاهلها.",
+    }
+  );
+  return { to, subject: `Your ${PRODUCT_NAME} operator account`, html, text };
+}

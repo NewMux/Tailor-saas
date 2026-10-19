@@ -30,5 +30,6 @@ export function registerAuthRateLimits(app: Express) {
   app.post("/api/auth/reset", authLimiter(10, { skipSuccessfulRequests: true }));
   app.post("/api/auth/register", authLimiter(20));
   app.post("/api/auth/forgot", authLimiter(5));
+  app.post("/api/auth/reauth", authLimiter(10, { skipSuccessfulRequests: true }));
   app.get("/api/auth/invite", authLimiter(30));
 }

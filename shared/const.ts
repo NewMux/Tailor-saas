@@ -3,6 +3,9 @@ export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
 export const ORG_SUSPENDED_ERR_MSG = "This organization's access has been suspended. Contact support. (10003)";
 export const NOT_PLATFORM_STAFF_ERR_MSG = 'You do not have platform operator access (10004)';
 export const BILLING_READ_ONLY_ERR_MSG = "Your shop is in read-only mode until a subscription is active. Visit Billing to continue. (10005)";
+export const REAUTH_REQUIRED_ERR_MSG = 'Please confirm your password to continue (10006)';
+export const IMPERSONATION_BLOCKED_ERR_MSG = 'This action is not available while impersonating a user (10007)';
+export const IMPERSONATION_READ_ONLY_ERR_MSG = 'This impersonation session is read-only. Start a write session to make changes (10008)';
 /** Product name used in server-generated copy such as emails. */
 export const PRODUCT_NAME = "Tafsell";
 // Tafsell is built and run by NewMux; shown as "Tafsell, powered by NewMux".
