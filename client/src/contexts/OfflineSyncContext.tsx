@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { listOfflineSales, removeOfflineSale } from "@/lib/offlineSalesQueue";
+import { countForeignOfflineSales, listOfflineSales, removeOfflineSale, setOfflineOwner } from "@/lib/offlineSalesQueue";
 
 type OfflineSyncContextValue = {
   isOnline: boolean;
@@ -16,7 +16,12 @@ type OfflineSyncContextValue = {
 const OfflineSyncContext = createContext<OfflineSyncContextValue | null>(null);
 
 export function OfflineSyncProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  // Offline data belongs to one account: never while impersonating, and only
+  // once we know which shop and user are signed in.
+  const owner = user && user.organizationId != null && !user.impersonation ? { organizationId: user.organizationId, userId: user.id } : null;
+  setOfflineOwner(owner);
+  const ownerKey = owner ? `${owner.organizationId}:${owner.userId}` : "";
   const utils = trpc.useUtils();
   const checkout = trpc.pos.checkout.useMutation();
   const quickCheckout = trpc.pos.quickCheckout.useMutation();
@@ -38,13 +43,15 @@ export function OfflineSyncProvider({ children }: { children: React.ReactNode })
   const refreshPendingCount = useCallback(async () => {
     try {
       setPendingCount((await listOfflineSales()).length);
+      const foreign = await countForeignOfflineSales();
+      if (foreign > 0 && ownerKey) toast.warning(`${foreign} unsynced sale(s) from another account are still stored on this device. Sign in with that account to sync them.`, { id: "offline-foreign" });
     } catch {
       setPendingCount(0);
     }
-  }, []);
+  }, [ownerKey]);
 
   const syncNow = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.onLine || !isAuthenticated || syncingRef.current) return;
+    if (typeof navigator === "undefined" || !navigator.onLine || !isAuthenticated || !ownerKey || syncingRef.current) return;
     syncingRef.current = true;
     setIsSyncing(true);
     setSyncError(null);
@@ -84,7 +91,7 @@ export function OfflineSyncProvider({ children }: { children: React.ReactNode })
       syncingRef.current = false;
       setIsSyncing(false);
     }
-  }, [isAuthenticated, refreshPendingCount]);
+  }, [isAuthenticated, ownerKey, refreshPendingCount]);
 
   useEffect(() => {
     void refreshPendingCount();

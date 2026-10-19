@@ -9,22 +9,29 @@ import {
   type BusinessRole,
 } from "../../drizzle/schema";
 import { orgScope, dbOrThrow } from "../_core/tenantDb";
+import { resolveAccess } from "../_core/access";
+export {
+  adminRoles,
+  salesRoles,
+  catalogRoles,
+  inventoryRoles,
+  payrollRoles,
+  tailoringRoles,
+  staffDirectoryRoles,
+  dashboardRoles,
+  customerReadRoles,
+  customerWriteRoles,
+  measurementWriteRoles,
+  customPermissionValues,
+  customRoleCanAccess,
+  resolveAccess,
+  hasAccess,
+  type CustomPermission,
+} from "../_core/access";
 export { dbOrThrow };
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const adminRoles: BusinessRole[] = ["admin"];
-export const salesRoles: BusinessRole[] = ["admin", "sales"];
-export const catalogRoles: BusinessRole[] = ["admin", "sales", "inventory"];
-export const inventoryRoles: BusinessRole[] = ["admin", "inventory"];
-export const payrollRoles: BusinessRole[] = ["admin", "payroll"];
-export const tailoringRoles: BusinessRole[] = ["admin", "sales", "tailor"];
-export const staffDirectoryRoles: BusinessRole[] = [
-  "admin",
-  "payroll",
-  "sales",
-  "tailor",
-];
 export const staffDocumentMimeTypes = new Set([
   "application/pdf",
   "image/png",
@@ -42,40 +49,6 @@ export const staffDocumentExtensions = new Set([
   ".doc",
   ".docx",
 ]);
-export const customPermissionValues = [
-  "dashboard",
-  "customers",
-  "sales",
-  "inventory",
-  "payroll",
-  "production",
-] as const;
-export type CustomPermission = (typeof customPermissionValues)[number];
-const legacyPermissions: Record<BusinessRole, CustomPermission[]> = {
-  admin: [
-    "dashboard",
-    "customers",
-    "sales",
-    "inventory",
-    "payroll",
-    "production",
-  ],
-  sales: ["dashboard", "customers", "sales"],
-  tailor: ["customers", "production"],
-  inventory: ["inventory"],
-  payroll: ["payroll"],
-};
-export const customRoleCanAccess = (
-  permissions: string[],
-  allowed: BusinessRole[]
-) =>
-  allowed
-    .filter(role => role !== "admin")
-    .some(role =>
-      legacyPermissions[role].some(permission =>
-        permissions.includes(permission)
-      )
-    );
 export const three = (value: number) => value.toFixed(3);
 export const getMonthBounds = (payPeriod: string) => {
   const start = new Date(`${payPeriod}-01T00:00:00.000Z`);
@@ -244,95 +217,13 @@ export const getMonthWindow = (month: string) => {
     end: new Date(Date.UTC(year, monthIndex, 0, 23, 59, 59, 999)),
   };
 };
-/**
- * Verifies the caller has an active business role (or owner-assigned custom
- * role) permitted to perform this action, *within their own organization*.
- * Every lookup is scoped by organizationId: userBusinessRoles/userCustomRoles
- * rows are 1:1 with a user (unique on userId) so the organizationId filter
- * can never match a row belonging to a different org than the caller's own,
- * but it is included on every lookup here regardless, on the same
- * always-filter discipline as every other tenant-table query in this file.
- *
- * Membership is always created atomically at org-creation or invite-
- * acceptance time (server/db.ts) now, so a missing row here is a real error,
- * not a "pending approval" state to tolerate.
- */
+/** Verifies the caller may perform an action within their own organization; see resolveAccess. */
 export async function access(
   userId: number,
   organizationId: number,
   allowed: BusinessRole[]
 ) {
-  const db = await dbOrThrow();
-  const record = (
-    await db
-      .select()
-      .from(userBusinessRoles)
-      .where(
-        and(
-          eq(userBusinessRoles.userId, userId),
-          orgScope(userBusinessRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  if (!record)
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Your ERP access could not be verified.",
-    });
-  if (!record.isActive)
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Your ERP access is inactive.",
-    });
-  if (record.role === "admin") return record.role;
-  const assignment = (
-    await db
-      .select()
-      .from(userCustomRoles)
-      .where(
-        and(
-          eq(userCustomRoles.userId, userId),
-          orgScope(userCustomRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  if (assignment) {
-    const role = (
-      await db
-        .select()
-        .from(customRoles)
-        .where(
-          and(
-            eq(customRoles.id, assignment.customRoleId),
-            orgScope(customRoles, organizationId)
-          )
-        )
-        .limit(1)
-    )[0];
-    const permissions = Array.isArray(role?.permissionsJson)
-      ? role.permissionsJson.filter(
-          (value): value is string => typeof value === "string"
-        )
-      : [];
-    if (
-      !assignment.isActive ||
-      !role?.isActive ||
-      !customRoleCanAccess(permissions, allowed)
-    )
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message:
-          "Your owner-assigned role is not permitted to perform this action.",
-      });
-    return `custom:${role.name}`;
-  }
-  if (allowed.includes(record.role)) return record.role;
-  throw new TRPCError({
-    code: "FORBIDDEN",
-    message: "Your assigned role is not permitted to perform this action.",
-  });
+  return (await resolveAccess(userId, organizationId, allowed)).label;
 }
 export async function audit(
   userId: number,

@@ -5,10 +5,12 @@ import path from "node:path";
 import { defineConfig } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime()];
-
-export default defineConfig({
-  plugins,
+// jsx-loc (data-loc attributes) and the Manus preview runtime (an inline script
+// with an unchecked postMessage listener that can set cookies) are dev-server
+// tooling. They must never reach a production bundle, where they also make a
+// strict Content-Security-Policy impossible.
+export default defineConfig(({ command }) => ({
+  plugins: [react(), tailwindcss(), ...(command === "serve" ? [jsxLocPlugin(), vitePluginManusRuntime()] : [])],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -39,4 +41,4 @@ export default defineConfig({
       deny: ["**/.*"],
     },
   },
-});
+}));

@@ -1,9 +1,11 @@
 import { authApi } from "@/lib/auth";
 import { getInviteToken, getPasswordResetToken } from "@/lib/authCallback";
 import { trpc } from "@/lib/trpc";
+import { clearOfflineSnapshots } from "@/lib/offlineSalesQueue";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type CachedUser = { id: number; name: string | null; email: string | null; role: "user" | "admin"; impersonation?: { by: string } | null; isPlatformStaff?: boolean };
+type CachedUser = { id: number; name: string | null; email: string | null; role: "user" | "admin"; organizationId?: number | null; impersonation?: { by: string } | null; isPlatformStaff?: boolean };
 const CACHED_USER_KEY = "al-hussam-erp-last-user";
 
 function readCachedUser(): CachedUser | null {
@@ -13,7 +15,7 @@ function readCachedUser(): CachedUser | null {
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<CachedUser>;
     if (typeof value.id !== "number" || (value.role !== "user" && value.role !== "admin")) return null;
-    return { id: value.id, name: typeof value.name === "string" ? value.name : null, email: typeof value.email === "string" ? value.email : null, role: value.role };
+    return { id: value.id, name: typeof value.name === "string" ? value.name : null, email: typeof value.email === "string" ? value.email : null, role: value.role, organizationId: typeof value.organizationId === "number" ? value.organizationId : null };
   } catch {
     return null;
   }
@@ -25,6 +27,7 @@ function clearCachedUser() {
 
 export function useAuth() {
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
   const [loggingOut, setLoggingOut] = useState(false);
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [callbackError, setCallbackError] = useState<string | null>(null);
@@ -78,7 +81,7 @@ export function useAuth() {
 
   useEffect(() => {
     if (!meQuery.data) return;
-    const nextUser: CachedUser = { id: meQuery.data.id, name: meQuery.data.name, email: meQuery.data.email, role: meQuery.data.role };
+    const nextUser: CachedUser = { id: meQuery.data.id, name: meQuery.data.name, email: meQuery.data.email, role: meQuery.data.role, organizationId: meQuery.data.organizationId };
     setCachedUser(nextUser);
     try { window.localStorage.setItem(CACHED_USER_KEY, JSON.stringify(nextUser)); } catch { /* Offline storage may be unavailable. */ }
   }, [meQuery.data]);
@@ -87,6 +90,9 @@ export function useAuth() {
     setLoggingOut(true);
     try {
       await authApi.logout();
+      // The next person on this device must not see this account's data.
+      queryClient.clear();
+      void clearOfflineSnapshots();
       setHasSession(false);
       setCachedUser(null);
       clearCachedUser();
@@ -94,7 +100,7 @@ export function useAuth() {
     } finally {
       setLoggingOut(false);
     }
-  }, [utils]);
+  }, [utils, queryClient]);
 
   const clearInviteToken = useCallback(() => {
     setInviteToken(null);

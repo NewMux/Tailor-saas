@@ -1,7 +1,11 @@
 export type OfflineSaleKind = "checkout" | "quickCheckout";
 
+/** The signed-in account that queued a sale. Offline data is only ever used by that account. */
+export type OfflineOwner = { organizationId: number; userId: number };
+
 export type OfflineSaleRecord = {
   clientReference: string;
+  owner?: OfflineOwner;
   kind: OfflineSaleKind;
   input: Record<string, unknown>;
   queuedAt: number;
@@ -32,6 +36,22 @@ const SALES_STORE_NAME = "sales";
 const SNAPSHOT_STORE_NAME = "snapshots";
 const DB_VERSION = 2;
 
+let currentOwner: OfflineOwner | null = null;
+
+/** Set by the sync provider from the signed-in user; null while signed out or impersonating. */
+export function setOfflineOwner(owner: OfflineOwner | null) {
+  currentOwner = owner;
+}
+
+export function isOwnedBy(record: { owner?: OfflineOwner }, owner: OfflineOwner | null) {
+  return Boolean(owner && record.owner && record.owner.organizationId === owner.organizationId && record.owner.userId === owner.userId);
+}
+
+/** Cached catalog/settings snapshots are per organization, never shared between shops. */
+export function scopedSnapshotKey(key: string, owner: OfflineOwner | null) {
+  return owner ? `org${owner.organizationId}:${key}` : null;
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -46,8 +66,9 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 export async function enqueueOfflineSale(kind: OfflineSaleKind, input: Record<string, unknown>) {
+  if (!currentOwner) throw new Error("Offline sales are not available for this session.");
   const clientReference = typeof input.clientReference === "string" && input.clientReference ? input.clientReference : `offline-${Date.now()}-${crypto.randomUUID()}`;
-  const record: OfflineSaleRecord = { clientReference, kind, input: { ...input, clientReference }, queuedAt: Date.now() };
+  const record: OfflineSaleRecord = { clientReference, owner: currentOwner, kind, input: { ...input, clientReference }, queuedAt: Date.now() };
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(SALES_STORE_NAME, "readwrite");
@@ -59,7 +80,16 @@ export async function enqueueOfflineSale(kind: OfflineSaleKind, input: Record<st
   return record;
 }
 
+/** Queued sales that belong to someone else (or to no known account); kept, never replayed or deleted. */
+export async function countForeignOfflineSales(): Promise<number> {
+  return (await listAllOfflineSales()).filter(record => !isOwnedBy(record, currentOwner)).length;
+}
+
 export async function listOfflineSales(): Promise<OfflineSaleRecord[]> {
+  return (await listAllOfflineSales()).filter(record => isOwnedBy(record, currentOwner));
+}
+
+async function listAllOfflineSales(): Promise<OfflineSaleRecord[]> {
   if (typeof indexedDB === "undefined") return [];
   const database = await openDatabase();
   const records = await new Promise<OfflineSaleRecord[]>((resolve, reject) => {
@@ -82,8 +112,22 @@ export async function removeOfflineSale(clientReference: string) {
   database.close();
 }
 
-export async function saveOfflineSnapshot<T>(key: string, value: T) {
+/** Drops cached catalogs and settings (not unsynced sales), e.g. on sign-out. */
+export async function clearOfflineSnapshots() {
   if (typeof indexedDB === "undefined") return;
+  const database = await openDatabase();
+  await new Promise<void>(resolve => {
+    const transaction = database.transaction(SNAPSHOT_STORE_NAME, "readwrite");
+    transaction.objectStore(SNAPSHOT_STORE_NAME).clear();
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => resolve();
+  });
+  database.close();
+}
+
+export async function saveOfflineSnapshot<T>(rawKey: string, value: T) {
+  const key = scopedSnapshotKey(rawKey, currentOwner);
+  if (!key || typeof indexedDB === "undefined") return;
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(SNAPSHOT_STORE_NAME, "readwrite");
@@ -94,8 +138,9 @@ export async function saveOfflineSnapshot<T>(key: string, value: T) {
   database.close();
 }
 
-export async function readOfflineSnapshot<T>(key: string): Promise<T | undefined> {
-  if (typeof indexedDB === "undefined") return undefined;
+export async function readOfflineSnapshot<T>(rawKey: string): Promise<T | undefined> {
+  const key = scopedSnapshotKey(rawKey, currentOwner);
+  if (!key || typeof indexedDB === "undefined") return undefined;
   const database = await openDatabase();
   const record = await new Promise<{ value?: T } | undefined>((resolve, reject) => {
     const request = database.transaction(SNAPSHOT_STORE_NAME, "readonly").objectStore(SNAPSHOT_STORE_NAME).get(key);

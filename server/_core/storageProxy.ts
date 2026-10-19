@@ -6,71 +6,24 @@ import {
   userBusinessRoles,
   userCustomRoles,
 } from "../../drizzle/schema";
+import { HttpError } from "@shared/_core/errors";
 import { getDb } from "../db";
 import { orgScope } from "./tenantDb";
+import { TRPCError } from "@trpc/server";
+import { payrollRoles, resolveAccess } from "./access";
 import { sdk } from "./sdk";
 import { isStorageConfigured, storageGetSignedUrl } from "../storage";
 import { logger } from "./logger";
 import { captureError } from "./sentry";
 
 async function canReadStaffDocuments(userId: number, organizationId: number) {
-  const db = await getDb();
-  if (!db) return false;
-  const businessRole = (
-    await db
-      .select({
-        role: userBusinessRoles.role,
-        isActive: userBusinessRoles.isActive,
-      })
-      .from(userBusinessRoles)
-      .where(
-        and(
-          eq(userBusinessRoles.userId, userId),
-          orgScope(userBusinessRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  if (!businessRole?.isActive) return false;
-  if (businessRole.role === "admin" || businessRole.role === "payroll")
+  try {
+    await resolveAccess(userId, organizationId, payrollRoles);
     return true;
-  const assignment = (
-    await db
-      .select({
-        customRoleId: userCustomRoles.customRoleId,
-        isActive: userCustomRoles.isActive,
-      })
-      .from(userCustomRoles)
-      .where(
-        and(
-          eq(userCustomRoles.userId, userId),
-          orgScope(userCustomRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  if (!assignment?.isActive) return false;
-  const customRole = (
-    await db
-      .select({
-        permissionsJson: customRoles.permissionsJson,
-        isActive: customRoles.isActive,
-      })
-      .from(customRoles)
-      .where(
-        and(
-          eq(customRoles.id, assignment.customRoleId),
-          orgScope(customRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  const permissions = Array.isArray(customRole?.permissionsJson)
-    ? customRole.permissionsJson.filter(
-        (value): value is string => typeof value === "string"
-      )
-    : [];
-  return Boolean(customRole?.isActive && permissions.includes("payroll"));
+  } catch (error) {
+    if (error instanceof TRPCError) return false;
+    throw error;
+  }
 }
 
 export function registerStorageProxy(app: Express) {
@@ -87,7 +40,13 @@ export function registerStorageProxy(app: Express) {
     }
 
     try {
-      const { user } = await sdk.authenticateRequest(req);
+      const { user, impersonatedBy } = await sdk.authenticateRequest(req);
+      // Staff documents are personal data: operators never read them by
+      // borrowing a shop user's session, in read-only or write mode.
+      if (impersonatedBy) {
+        res.status(403).send("Documents are not available during impersonation.");
+        return;
+      }
       if (!user.organizationId) {
         res.status(403).send("You are not permitted to access this document.");
         return;
@@ -135,13 +94,8 @@ export function registerStorageProxy(app: Express) {
       });
       res.redirect(307, url);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "unknown error";
-      if (
-        message === "Missing session" ||
-        message === "Invalid session" ||
-        message === "Session verification unavailable" ||
-        message === "Server authentication is not configured"
-      ) {
+      // sdk.authenticateRequest throws an HttpError(403) when there is no valid session.
+      if (err instanceof HttpError) {
         res.status(401).send("Authentication required");
         return;
       }

@@ -120,6 +120,13 @@
       "when": 1788100000000,
       "tag": "0015_enable_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788200000000,
+      "tag": "0016_tenant_hardening",
+      "breakpoints": true
     }
   ]
 }

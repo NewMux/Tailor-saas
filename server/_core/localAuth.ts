@@ -405,7 +405,8 @@ async function forgotPassword(req: Request, res: Response) {
       // Without a mail provider the operator still needs a way to hand the
       // link over, so it is logged, but never when it has already been
       // emailed: a reset link in the logs is a credential.
-      logger.info({ email, resetUrl: resetUrlValue }, "Password reset link generated (email not sent)");
+      // A reset link is a credential: only development logs it.
+      logger.info({ email, ...(ENV.isProduction ? {} : { resetUrl: resetUrlValue }) }, "Password reset link generated (email not sent)");
     }
   }
   res.json({

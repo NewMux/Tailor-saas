@@ -195,6 +195,16 @@ export async function acceptInviteAndCreateUser(inviteId: number, newUser: Omit<
       .returning();
     if (!user) throw new Error("Unable to create the account");
 
+    // The access checks look for a business-role row first. It is only a
+    // placeholder: the invited custom role decides what this person may do, and
+    // without that role the placeholder grants nothing (see resolveAccess).
+    await tx.insert(userBusinessRoles).values({
+      userId: user.id,
+      organizationId: invite.organizationId,
+      role: "sales",
+      isActive: true,
+      isPlaceholder: true,
+    });
     await tx.insert(userCustomRoles).values({
       userId: user.id,
       organizationId: invite.organizationId,

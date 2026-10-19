@@ -26,7 +26,7 @@ import {
 import { getDb } from "../db";
 import { effectiveInventoryQuantity } from "../inventoryQuantity";
 import { tenantProcedure, router } from "../_core/trpc";
-import { orgScope } from "../_core/tenantDb";
+import { assertOwned, orgScope } from "../_core/tenantDb";
 import {
   money,
   paymentMethod,
@@ -75,6 +75,8 @@ export const ordersRouter = router({
     .input(heldOrderInput)
     .mutation(async ({ ctx, input }) => {
       await requireCounterAccess(ctx.user.id, ctx.organizationId);
+      await assertOwned(posSessions, input.sessionId, ctx.organizationId, "Register session");
+      await assertOwned(customers, input.customerId, ctx.organizationId, "Customer");
       const db = await dbOrThrow();
       const orderNumber = `HOLD-${Date.now()}`;
       const result = await db

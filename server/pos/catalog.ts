@@ -65,7 +65,10 @@ export const catalogRouter = router({
         .from(services)
         .leftJoin(
           inventoryItems,
-          eq(services.inventoryItemId, inventoryItems.id)
+          and(
+            eq(services.inventoryItemId, inventoryItems.id),
+            eq(inventoryItems.organizationId, services.organizationId)
+          )
         )
         .where(
           and(

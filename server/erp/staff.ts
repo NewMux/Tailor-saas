@@ -50,7 +50,7 @@ import {
 export { rollDerivedQuantity } from "../inventoryQuantity";
 import { isStorageConfigured, storageGetSignedUrl, storagePut } from "../storage";
 import { tenantProcedure, router } from "../_core/trpc";
-import { orgScope } from "../_core/tenantDb";
+import { assertOwned, orgScope } from "../_core/tenantDb";
 import { ENV } from "../_core/env";
 import { hashOpaqueToken, randomToken } from "../_core/localAuth";
 import {
@@ -84,6 +84,7 @@ import {
   getMonthWindow,
   dbOrThrow,
   access,
+  hasAccess,
   audit,
   customerInput,
   tailoringOrderStatuses,
@@ -133,6 +134,13 @@ export const staffRouter = router({
             code: "NOT_FOUND",
             message: "Staff document not found.",
           });
+        await audit(
+          ctx.user.id,
+          ctx.organizationId,
+          "STAFF_DOCUMENT_VIEWED",
+          "staffDocument",
+          document.id
+        );
         return {
           url: await storageGetSignedUrl(document.storageKey),
           fileName: document.fileName,
@@ -226,7 +234,7 @@ export const staffRouter = router({
   }),
   list: tenantProcedure.query(async ({ ctx }) => {
     await access(ctx.user.id, ctx.organizationId, staffDirectoryRoles);
-    return (await dbOrThrow())
+    const rows = await (await dbOrThrow())
       .select()
       .from(staffProfiles)
       .where(
@@ -236,6 +244,18 @@ export const staffRouter = router({
         )
       )
       .orderBy(staffProfiles.name);
+    // Pay is for payroll and admins; everyone else gets the directory (pickers).
+    if (await hasAccess(ctx.user.id, ctx.organizationId, payrollRoles)) return rows;
+    // Typed as full rows so the payroll screens keep their types; the screens
+    // that non-payroll roles can reach only read these directory fields.
+    return rows.map(({ id, userId, name, phone, jobTitle, isActive }) => ({
+      id,
+      userId,
+      name,
+      phone,
+      jobTitle,
+      isActive,
+    })) as unknown as typeof rows;
   }),
   linkAccess: tenantProcedure
     .input(
@@ -449,6 +469,7 @@ export const staffRouter = router({
           code: "NOT_FOUND",
           message: "Staff profile not found.",
         });
+      await assertOwned(staffDocuments, input.absenceDocumentId, ctx.organizationId, "Document");
       const payPeriod = input.workDate.slice(0, 7);
       const absenceDeduction = absenceDeductionFor(
         Number(profile.baseSalary),
@@ -513,6 +534,7 @@ export const staffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await access(ctx.user.id, ctx.organizationId, payrollRoles);
+      await assertOwned(staffProfiles, input.staffProfileId, ctx.organizationId, "Staff profile");
       await (await dbOrThrow()).insert(performanceRecords).values({
         ...input,
         organizationId: ctx.organizationId,

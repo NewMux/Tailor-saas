@@ -462,7 +462,7 @@ export const teamRouter = router({
         .values({ ...input, organizationId: ctx.organizationId })
         .onConflictDoUpdate({
           target: userBusinessRoles.userId,
-          set: { role: input.role, isActive: input.isActive },
+          set: { role: input.role, isActive: input.isActive, isPlaceholder: false },
         });
       await audit(
         ctx.user.id,
@@ -675,6 +675,7 @@ export const accessRouter = router({
             organizationId: ctx.organizationId,
             role: "sales",
             isActive: true,
+            isPlaceholder: true,
           })
           .onConflictDoUpdate({
             target: userBusinessRoles.userId,
@@ -837,6 +838,7 @@ export const accessApprovalRouter = router({
             organizationId: ctx.organizationId,
             role: "sales",
             isActive: true,
+            isPlaceholder: true,
           })
           .onConflictDoUpdate({
             target: userBusinessRoles.userId,

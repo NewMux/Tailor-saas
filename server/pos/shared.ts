@@ -13,6 +13,7 @@ import {
   userCustomRoles,
 } from "../../drizzle/schema";
 import { orgScope, dbOrThrow } from "../_core/tenantDb";
+import { resolveAccess, salesRoles } from "../_core/access";
 export { dbOrThrow };
 
 export const money = (value: number) => Number(value.toFixed(3)).toFixed(3);
@@ -108,77 +109,9 @@ export async function requireCounterAccess(
   userId: number,
   organizationId: number
 ) {
-  const db = await dbOrThrow();
-  const role = (
-    await db
-      .select()
-      .from(userBusinessRoles)
-      .where(
-        and(
-          eq(userBusinessRoles.userId, userId),
-          orgScope(userBusinessRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  if (!role)
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Your ERP access could not be verified.",
-    });
-  if (!role.isActive)
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Your ERP access is inactive.",
-    });
-  if (role.role === "admin") return;
-  const assignment = (
-    await db
-      .select()
-      .from(userCustomRoles)
-      .where(
-        and(
-          eq(userCustomRoles.userId, userId),
-          orgScope(userCustomRoles, organizationId)
-        )
-      )
-      .limit(1)
-  )[0];
-  if (assignment) {
-    const customRole = (
-      await db
-        .select()
-        .from(customRoles)
-        .where(
-          and(
-            eq(customRoles.id, assignment.customRoleId),
-            orgScope(customRoles, organizationId)
-          )
-        )
-        .limit(1)
-    )[0];
-    const permissions = Array.isArray(customRole?.permissionsJson)
-      ? customRole.permissionsJson.filter(
-          (value): value is string => typeof value === "string"
-        )
-      : [];
-    if (
-      !assignment.isActive ||
-      !customRole?.isActive ||
-      !permissions.includes("sales")
-    )
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message:
-          "Your owner-assigned role is not permitted to complete counter sales.",
-      });
-    return;
-  }
-  if (role.role !== "sales")
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Your role is not permitted to complete counter sales.",
-    });
+  await resolveAccess(userId, organizationId, salesRoles, {
+    deniedMessage: "Your role is not permitted to complete counter sales.",
+  });
 }
 
 export async function audit(
