@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   DATABASE_URL: postgres://erp:erp@localhost:5432/tailor_erp
 
@@ -42,6 +45,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=high
 
       - name: Type check
         run: pnpm check
@@ -110,6 +116,11 @@ jobs:
         run: pnpm exec playwright test
         env:
           E2E_BASE_URL: http://localhost:3000
+
+      - name: Security probe (cross-tenant checks)
+        run: pnpm security:probe --base-url http://localhost:3000 --mode full --bootstrap
+        env:
+          AUTH_BASE_URL: http://localhost:3000
 
       - name: Show server log on failure
         if: failure()

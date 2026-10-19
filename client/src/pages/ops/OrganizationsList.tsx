@@ -71,14 +71,14 @@ export function copySetupLink(url: string) {
 }
 
 /** Shows a freshly created owner setup link, which can't be retrieved again later. */
-export function SetupLinkNotice({ setupUrl, emailed }: { setupUrl: string; emailed: boolean }) {
+export function SetupLinkNotice({ setupUrl, emailed, who = "owner", expires = "7 days" }: { setupUrl: string; emailed: boolean; who?: string; expires?: string }) {
   return (
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground">
         {emailed
-          ? "We emailed this link to the owner. You can also send it yourself."
-          : "Email isn't set up, so send this link to the owner yourself."}{" "}
-        It works once and expires in 7 days.
+          ? `We emailed this link to the ${who}. You can also send it yourself.`
+          : `Email isn't set up, so send this link to the ${who} yourself.`}{" "}
+        It works once and expires in {expires}.
       </p>
       <div className="flex gap-2">
         <Input readOnly value={setupUrl} onFocus={event => event.currentTarget.select()} className="font-mono text-xs" />

@@ -3,7 +3,9 @@ import NotFound from "@/pages/NotFound";
 import OpsShell from "./OpsShell";
 import OrganizationDetail from "./OrganizationDetail";
 import OrganizationsList from "./OrganizationsList";
-import PlatformAuditFeed from "./PlatformAuditFeed";
+import AuditExplorer from "./AuditExplorer";
+import SecurityPage from "./SecurityPage";
+import UsersPage from "./UsersPage";
 import PlatformStaffList from "./PlatformStaffList";
 
 export default function OpsApp() {
@@ -13,7 +15,9 @@ export default function OpsApp() {
         <Route path="/ops" component={OrganizationsList} />
         <Route path="/ops/orgs/:id" component={OrganizationDetail} />
         <Route path="/ops/staff" component={PlatformStaffList} />
-        <Route path="/ops/audit" component={PlatformAuditFeed} />
+        <Route path="/ops/users" component={UsersPage} />
+        <Route path="/ops/audit" component={AuditExplorer} />
+        <Route path="/ops/security" component={SecurityPage} />
         <Route component={NotFound} />
       </Switch>
     </OpsShell>

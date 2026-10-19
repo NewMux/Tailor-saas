@@ -49,7 +49,7 @@ import {
 export { rollDerivedQuantity } from "../inventoryQuantity";
 import { storageGetSignedUrl, storagePut } from "../storage";
 import { tenantProcedure, router } from "../_core/trpc";
-import { orgScope } from "../_core/tenantDb";
+import { assertOwned, orgScope } from "../_core/tenantDb";
 import { ENV } from "../_core/env";
 import { hashOpaqueToken, randomToken } from "../_core/localAuth";
 import {
@@ -99,7 +99,13 @@ export const servicesRouter = router({
     )
       .select({ service: services, inventory: inventoryItems })
       .from(services)
-      .leftJoin(inventoryItems, eq(services.inventoryItemId, inventoryItems.id))
+      .leftJoin(
+        inventoryItems,
+        and(
+          eq(services.inventoryItemId, inventoryItems.id),
+          eq(inventoryItems.organizationId, services.organizationId)
+        )
+      )
       .where(
         and(orgScope(services, ctx.organizationId), eq(services.isActive, true))
       )
@@ -138,6 +144,7 @@ export const servicesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await access(ctx.user.id, ctx.organizationId, inventoryRoles);
+      await assertOwned(inventoryItems, input.inventoryItemId, ctx.organizationId, "Inventory item");
       const result = await (
         await dbOrThrow()
       )

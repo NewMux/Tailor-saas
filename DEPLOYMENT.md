@@ -299,33 +299,58 @@ pg_dump --format=custom --no-owner --no-acl --schema=public --schema=drizzle \
 
 `scripts/backup-db.sh` does the same for the local docker-compose database.
 
-## 10. Granting platform-staff access
+## 10. Operators (platform staff)
 
 Platform staff (your own operators, as opposed to a shop's own staff) is a
 separate concept from any organization's roles; see the comment on the
-`platformStaff` table in `drizzle/schema.ts`. There is no UI to grant the
-first one, so bootstrap it from a shell with access to `DATABASE_URL`, once
-the person has an account (create one with `pnpm shop:create` if needed):
+`platformStaff` table in `drizzle/schema.ts`. Operator accounts are
+**platform-only**: they belong to no shop, so a suspended shop can never lock
+an operator out.
+
+- `support` can read across shops (organizations, users, audit, sessions).
+- `superadmin` can also create and suspend shops, change billing, invite and
+  manage operators, sign people out, and impersonate a shop user.
+- Operator sessions last 12 hours. High-risk actions (staff changes,
+  suspending a shop, write-mode impersonation, signing people out) ask for the
+  operator's password again if it has not been confirmed in the last 10 minutes.
+- Impersonation is **read-only** by default. A separate 15 minute write mode
+  needs its own reason and allows only data fixes (customers, tailoring,
+  inventory, services). Staff, roles, billing and settings are never available
+  while impersonating, and every change is recorded with the real operator.
+
+**Day to day:** a superadmin opens `/ops` -> Platform staff -> *Invite a
+teammate*. They get a one-time link (also emailed when email is configured).
+
+**Bootstrap / break glass** (first operator, or nobody can sign in), from a
+shell with access to `DATABASE_URL`:
 
 ```bash
-DATABASE_URL=... pnpm platform:grant-staff --email you@example.com --role superadmin
+# Creates the account if it does not exist and prints a one-time setup link.
+DATABASE_URL=... AUTH_BASE_URL=https://app.example.com \
+  pnpm platform:grant-staff --email you@example.com --name "Your Name" --role superadmin
+# Remove access:
+DATABASE_URL=... pnpm platform:grant-staff --email you@example.com --revoke
+# Sign everyone out (e.g. after a credential exposure):
+DATABASE_URL=... pnpm auth:revoke-sessions
 ```
 
-`--role` is `support` (read-only across organizations) or `superadmin`
-(can also create shops, suspend/reactivate organizations, change billing exemptions and
-trials, grant/revoke other platform staff, and impersonate a user for
-support). Pass `--revoke` instead of `--role` to remove access. This script
-remains the break-glass path even though the ops panel can grant and revoke
-staff, the same way `pnpm auth:reset-links` remains the break-glass path for
-password resets.
+Every grant or revoke made this way is written to the platform audit trail
+(`/ops` -> Audit) with the source "cli". See
+[docs/SECURITY-CHECKS.md](./docs/SECURITY-CHECKS.md) for how to verify
+authorization, tenant isolation and security.
 
 ## Security notes
 
 - Login, invite-acceptance, forgot-password and reset endpoints are rate-limited per IP.
+- Request logs never contain session tokens, cookies, invite or reset tokens, or SQL parameters.
+- Each account is throttled after 10 password attempts in 15 minutes (shared across instances through the database), on top of the per-IP limits.
 - Public sign-up is closed: `/api/auth/register` only accepts a valid staff invite, and only superadmins can create shops.
 - The app trusts exactly one proxy hop (Vercel's, which overwrites `X-Forwarded-For` with the client address), so client IPs and HTTPS detection are correct.
 - Paddle webhooks are verified against `PADDLE_WEBHOOK_SECRET` over the raw request body, and replays older than 5 minutes are rejected. A subscription can only be linked to a shop through checkout data signed by the server.
 - Invite links only work for the email address they were sent to.
+- Every response carries `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and HSTS. The `Content-Security-Policy` ships **report-only**; once the browser console shows no violations on login, the point of sale and Billing (including a Paddle checkout) on the live site, set `CSP_ENFORCE=1` to enforce it.
+- Migration `0018` removes the Supabase Data API's `anon`/`authenticated` grants on `public`. Also disable the Data API and Auth email sign-ups in the Supabase dashboard, and add a Vercel Firewall rate-limit rule for `/api/auth/*` (the in-app limiter is per instance).
+- CI runs `pnpm audit --prod --audit-level=high`, CodeQL and Dependabot; the security probe (`pnpm security:probe`) runs in CI and, against production, from the `security-probe` workflow.
 
 ## Local development
 

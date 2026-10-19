@@ -17,6 +17,7 @@ import {
 } from "../drizzle/schema";
 import { adminRouter } from "./admin";
 import { createOrganizationWithOwner, getDb, getUserByEmail } from "./db";
+import { operatorContext } from "./testing/contexts";
 import { createApp } from "./_core/app";
 import type { TrpcContext } from "./_core/context";
 import { ACCOUNT_SETUP_TTL_MS, hashOpaqueToken } from "./_core/localAuth";
@@ -109,7 +110,7 @@ describeIfDb("invite-only shop onboarding (real Postgres)", () => {
   it("lets a superadmin create a shop whose owner sets a password through the setup link", async () => {
     const ownerEmail = `new-owner-${stamp}@example.com`;
     const result = await adminRouter
-      .createCaller(contextFor(superadmin.user))
+      .createCaller(operatorContext(superadmin.user))
       .organizations.create({
         shopName: `Fresh Shop ${stamp}`,
         ownerName: "Fresh Owner",
@@ -206,7 +207,7 @@ describeIfDb("invite-only shop onboarding (real Postgres)", () => {
   it("refuses an email that already has an account", async () => {
     await expect(
       adminRouter
-        .createCaller(contextFor(superadmin.user))
+        .createCaller(operatorContext(superadmin.user))
         .organizations.create({
           shopName: `Dup Shop ${stamp}`,
           ownerName: "Dup Owner",
@@ -216,7 +217,7 @@ describeIfDb("invite-only shop onboarding (real Postgres)", () => {
   });
 
   it("re-issues the owner's setup link only until they have set a password", async () => {
-    const caller = adminRouter.createCaller(contextFor(superadmin.user));
+    const caller = adminRouter.createCaller(operatorContext(superadmin.user));
     const { organizationId, setupUrl: first } =
       await caller.organizations.create({
         shopName: `Relink Shop ${stamp}`,

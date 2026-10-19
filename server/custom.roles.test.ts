@@ -27,3 +27,44 @@ describe("owner-managed role permissions", () => {
     expect(customRoleCanAccess(["dashboard"], ["admin", "payroll"])).toBe(false);
   });
 });
+
+describe("custom roles only get what their permissions name", () => {
+  const can = (permissions: string[], list: Parameters<typeof customRoleCanAccess>[1]) => customRoleCanAccess(permissions, list);
+
+  it("does not let a dashboard-only or customers-only role into sales routes", async () => {
+    const { salesRoles } = await import("./erp/shared");
+    expect(can(["dashboard"], salesRoles)).toBe(false);
+    expect(can(["customers"], salesRoles)).toBe(false);
+    expect(can(["sales"], salesRoles)).toBe(true);
+  });
+
+  it("does not let a dashboard-only role into tailoring or the staff directory", async () => {
+    const { tailoringRoles, staffDirectoryRoles } = await import("./erp/shared");
+    expect(can(["dashboard"], tailoringRoles)).toBe(false);
+    expect(can(["customers"], tailoringRoles)).toBe(false);
+    expect(can(["production"], tailoringRoles)).toBe(true);
+    expect(can(["dashboard"], staffDirectoryRoles)).toBe(false);
+    expect(can(["customers"], staffDirectoryRoles)).toBe(false);
+  });
+
+  it("opens the dashboard only to roles with the dashboard permission", async () => {
+    const { dashboardRoles } = await import("./erp/shared");
+    expect(can(["dashboard"], dashboardRoles)).toBe(true);
+    expect(can(["inventory"], dashboardRoles)).toBe(false);
+    expect(can(["sales"], dashboardRoles)).toBe(false);
+  });
+
+  it("lets a customers-only role read and edit customers but not delete them", async () => {
+    const { customerReadRoles, customerWriteRoles, salesRoles, measurementWriteRoles } = await import("./erp/shared");
+    expect(can(["customers"], customerReadRoles)).toBe(true);
+    expect(can(["customers"], customerWriteRoles)).toBe(true);
+    expect(can(["customers"], measurementWriteRoles)).toBe(true);
+    expect(can(["customers"], salesRoles)).toBe(false);
+    expect(can(["dashboard"], customerReadRoles)).toBe(false);
+  });
+
+  it("treats an unregistered ad-hoc list strictly, by each role's own permission", () => {
+    expect(can(["dashboard"], ["admin", "sales", "tailor"])).toBe(false);
+    expect(can(["production"], ["admin", "sales", "tailor"])).toBe(true);
+  });
+});

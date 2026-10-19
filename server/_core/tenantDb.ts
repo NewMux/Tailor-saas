@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
-import { eq, type SQL } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { and, eq, type SQL } from "drizzle-orm";
+import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { getDb } from "../db";
 
 /**
@@ -25,4 +25,23 @@ export async function dbOrThrow() {
       message: "Database is unavailable.",
     });
   return db;
+}
+
+/**
+ * Verifies that a record id supplied by the client belongs to the caller's
+ * organization before it is stored as a reference (a customer on a sale, an
+ * inventory item on a service, ...). Without this a tenant could point its
+ * own rows at another tenant's records. A missing id is not checked.
+ */
+export async function assertOwned<
+  T extends PgTable & { id: AnyPgColumn; organizationId: AnyPgColumn },
+>(table: T, recordId: number | null | undefined, organizationId: number, label: string) {
+  if (recordId === undefined || recordId === null) return;
+  const db = await dbOrThrow();
+  const rows = await db
+    .select({ id: table.id })
+    .from(table as PgTable)
+    .where(and(eq(table.id, recordId), orgScope(table, organizationId)))
+    .limit(1);
+  if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: `${label} not found.` });
 }

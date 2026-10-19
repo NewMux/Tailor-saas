@@ -1,5 +1,6 @@
 import {
   and,
+  count,
   desc,
   eq,
   gte,
@@ -462,7 +463,7 @@ export const teamRouter = router({
         .values({ ...input, organizationId: ctx.organizationId })
         .onConflictDoUpdate({
           target: userBusinessRoles.userId,
-          set: { role: input.role, isActive: input.isActive },
+          set: { role: input.role, isActive: input.isActive, isPlaceholder: false },
         });
       await audit(
         ctx.user.id,
@@ -475,6 +476,8 @@ export const teamRouter = router({
       return { success: true };
     }),
 });
+
+const MAX_INVITES_PER_DAY = 50;
 
 export const accessRouter = router({
   listInvites: tenantProcedure.query(async ({ ctx }) => {
@@ -525,6 +528,22 @@ export const accessRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Choose an active role before preparing staff access.",
+        });
+      // Invites are emailed from the platform's sender address; cap them per shop per day.
+      const [sentToday] = await db
+        .select({ n: count() })
+        .from(auditLogs)
+        .where(
+          and(
+            orgScope(auditLogs, ctx.organizationId),
+            eq(auditLogs.action, "STAFF_ACCESS_PREPARED"),
+            gte(auditLogs.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000))
+          )
+        );
+      if (Number(sentToday?.n ?? 0) >= MAX_INVITES_PER_DAY)
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Too many staff invites today. Try again tomorrow or contact support.",
         });
       const email = input.email.toLowerCase();
       const token = randomToken("invite");
@@ -675,6 +694,7 @@ export const accessRouter = router({
             organizationId: ctx.organizationId,
             role: "sales",
             isActive: true,
+            isPlaceholder: true,
           })
           .onConflictDoUpdate({
             target: userBusinessRoles.userId,
@@ -837,6 +857,7 @@ export const accessApprovalRouter = router({
             organizationId: ctx.organizationId,
             role: "sales",
             isActive: true,
+            isPlaceholder: true,
           })
           .onConflictDoUpdate({
             target: userBusinessRoles.userId,

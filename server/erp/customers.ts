@@ -49,13 +49,16 @@ import {
 export { rollDerivedQuantity } from "../inventoryQuantity";
 import { storageGetSignedUrl, storagePut } from "../storage";
 import { tenantProcedure, router } from "../_core/trpc";
-import { orgScope } from "../_core/tenantDb";
+import { assertOwned, orgScope } from "../_core/tenantDb";
 import { ENV } from "../_core/env";
 import { hashOpaqueToken, randomToken } from "../_core/localAuth";
 import {
   INVITE_TTL_MS,
   adminRoles,
   salesRoles,
+  customerReadRoles,
+  customerWriteRoles,
+  measurementWriteRoles,
   catalogRoles,
   inventoryRoles,
   payrollRoles,
@@ -95,11 +98,7 @@ export const customersRouter = router({
   list: tenantProcedure
     .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      await access(ctx.user.id, ctx.organizationId, [
-        "admin",
-        "sales",
-        "tailor",
-      ]);
+      await access(ctx.user.id, ctx.organizationId, customerReadRoles);
       const db = await dbOrThrow();
       const search = input?.search?.trim();
       const where = and(
@@ -122,7 +121,7 @@ export const customersRouter = router({
   create: tenantProcedure
     .input(customerInput)
     .mutation(async ({ ctx, input }) => {
-      await access(ctx.user.id, ctx.organizationId, salesRoles);
+      await access(ctx.user.id, ctx.organizationId, customerWriteRoles);
       const db = await dbOrThrow();
       const result = await db
         .insert(customers)
@@ -147,7 +146,7 @@ export const customersRouter = router({
   update: tenantProcedure
     .input(customerInput.extend({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      await access(ctx.user.id, ctx.organizationId, salesRoles);
+      await access(ctx.user.id, ctx.organizationId, customerWriteRoles);
       const db = await dbOrThrow();
       await db
         .update(customers)
@@ -356,11 +355,7 @@ export const customersRouter = router({
   measurements: tenantProcedure
     .input(z.object({ customerId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
-      await access(ctx.user.id, ctx.organizationId, [
-        "admin",
-        "sales",
-        "tailor",
-      ]);
+      await access(ctx.user.id, ctx.organizationId, customerReadRoles);
       return (await dbOrThrow())
         .select()
         .from(measurementProfiles)
@@ -385,11 +380,8 @@ export const customersRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      await access(ctx.user.id, ctx.organizationId, [
-        "admin",
-        "tailor",
-        "sales",
-      ]);
+      await access(ctx.user.id, ctx.organizationId, measurementWriteRoles);
+      await assertOwned(customers, input.customerId, ctx.organizationId, "Customer");
       const db = await dbOrThrow();
       const latest = (
         await db

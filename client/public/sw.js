@@ -1,4 +1,4 @@
-const SHELL_CACHE = "tailor-erp-mobile-shell-v5";
+const SHELL_CACHE = "tailor-erp-mobile-shell-v6";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -25,14 +25,16 @@ self.addEventListener("fetch", event => {
   const request = event.request;
   const url = new URL(request.url);
 
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/manus-storage/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
         .then(response => {
+          // One shell entry, never the requested URL: links such as /?reset_token=...
+          // carry one-time secrets that must not be written to Cache Storage.
           const copy = response.clone();
-          caches.open(SHELL_CACHE).then(cache => cache.put(request, copy));
+          caches.open(SHELL_CACHE).then(cache => cache.put("/index.html", copy));
           return response;
         })
         .catch(() => caches.match(request).then(cached => cached || caches.match("/index.html") || caches.match("/"))),

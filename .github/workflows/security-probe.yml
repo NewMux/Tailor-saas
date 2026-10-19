@@ -1,0 +1,60 @@
+name: Security probe
+
+# Manually run against a deployed environment (production included). Read-only:
+# GET requests and a few harmless unauthenticated POSTs; it creates nothing.
+# The sandbox used for development cannot reach *.vercel.app, so run it here.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "App origin, https only (e.g. https://tafsell.vercel.app)"
+        required: true
+      supabase_url:
+        description: "Supabase project URL, optional (e.g. https://<ref>.supabase.co)"
+        required: false
+      anon_key:
+        description: "Supabase publishable (anon) key, optional; public by design"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Inputs reach the shell only through env vars, and are validated first.
+      - name: Validate inputs
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          SUPABASE_URL: ${{ inputs.supabase_url }}
+        run: |
+          re='^https://[A-Za-z0-9._:-]+$'
+          [[ "$BASE_URL" =~ $re ]] || { echo "base_url must be an https origin without a path"; exit 1; }
+          if [ -n "$SUPABASE_URL" ]; then [[ "$SUPABASE_URL" =~ $re ]] || { echo "supabase_url must be an https origin"; exit 1; }; fi
+
+      - name: Run the probe (read-only)
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          SUPABASE_URL: ${{ inputs.supabase_url }}
+          ANON_KEY: ${{ inputs.anon_key }}
+        run: |
+          if [ -n "$SUPABASE_URL" ] && [ -n "$ANON_KEY" ]; then
+            pnpm security:probe --base-url "$BASE_URL" --mode readonly --supabase-url "$SUPABASE_URL" --anon-key "$ANON_KEY"
+          else
+            pnpm security:probe --base-url "$BASE_URL" --mode readonly
+          fi

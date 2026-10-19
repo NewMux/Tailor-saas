@@ -108,7 +108,7 @@ describeIfDb("billing (real Postgres)", () => {
     });
 
     it("does not block platform staff impersonating the shop", async () => {
-      const caller = erpRouter.createCaller(contextFor(shop.user, { impersonation: { platformStaffUserId: shop.user.id } }));
+      const caller = erpRouter.createCaller(contextFor(shop.user, { impersonation: { platformStaffUserId: shop.user.id, mode: "write" } }));
       await expect(caller.customers.create(customer(`Support ${stamp}`, "33330003"))).resolves.toBeTruthy();
     });
 

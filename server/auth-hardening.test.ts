@@ -18,6 +18,7 @@ import {
 } from "../drizzle/schema";
 import { adminRouter } from "./admin";
 import { createOrganizationWithOwner, getDb } from "./db";
+import { operatorContext } from "./testing/contexts";
 import { erpRouter } from "./erp";
 import { appRouter } from "./routers";
 import { createApp } from "./_core/app";
@@ -140,7 +141,7 @@ describeIfDb("auth hardening (real Postgres)", () => {
 
   describe("impersonation", () => {
     it("refuses to impersonate platform staff or yourself", async () => {
-      const caller = adminRouter.createCaller(contextFor(superadmin.user));
+      const caller = adminRouter.createCaller(operatorContext(superadmin.user));
       await expect(
         caller.impersonation.start({
           userId: otherStaff.user.id,
@@ -157,7 +158,7 @@ describeIfDb("auth hardening (real Postgres)", () => {
 
     it("never grants platform routes to an impersonation session, even if the target is platform staff", async () => {
       const { token } = await adminRouter
-        .createCaller(contextFor(superadmin.user))
+        .createCaller(operatorContext(superadmin.user))
         .impersonation.start({ userId: employee.id, reason: "Support ticket" });
       // Target becomes platform staff after the session started.
       const db = await getDb();
@@ -185,8 +186,8 @@ describeIfDb("auth hardening (real Postgres)", () => {
       expect(await sessionStillValid(token)).toBe(true);
 
       await adminRouter
-        .createCaller(contextFor(superadmin.user))
-        .staff.revoke({ userId: otherStaff.user.id });
+        .createCaller(operatorContext(superadmin.user))
+        .staff.revoke({ userId: otherStaff.user.id, reason: "Test revoke" });
       expect(await sessionStillValid(token)).toBe(false);
     });
   });

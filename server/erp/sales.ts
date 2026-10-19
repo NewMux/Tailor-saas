@@ -47,7 +47,7 @@ import {
 } from "../inventoryQuantity";
 export { rollDerivedQuantity } from "../inventoryQuantity";
 import { tenantProcedure, router } from "../_core/trpc";
-import { orgScope } from "../_core/tenantDb";
+import { assertOwned, orgScope } from "../_core/tenantDb";
 import { ENV } from "../_core/env";
 import { hashOpaqueToken, randomToken } from "../_core/localAuth";
 import {
@@ -128,6 +128,9 @@ export const salesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await access(ctx.user.id, ctx.organizationId, salesRoles);
+      await assertOwned(customers, input.customerId, ctx.organizationId, "Customer");
+      for (const item of input.items)
+        await assertOwned(services, item.serviceId, ctx.organizationId, "Service");
       const db = await dbOrThrow();
       const shop = (
         await db

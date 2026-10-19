@@ -2,12 +2,15 @@ import { Loader2, LogOut, ShieldAlert } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AuthGate from "@/components/AuthGate";
+import { ReauthProvider } from "@/components/ReauthDialog";
 import { Button } from "@/components/ui/button";
 
 const navigation = [
   { label: "Organizations", path: "/ops" },
+  { label: "Users", path: "/ops/users" },
   { label: "Platform staff", path: "/ops/staff" },
-  { label: "Audit feed", path: "/ops/audit" },
+  { label: "Audit", path: "/ops/audit" },
+  { label: "Security", path: "/ops/security" },
 ];
 
 export default function OpsShell({ children }: { children: React.ReactNode }) {
@@ -48,12 +51,12 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-3">
-            <Link href="/" className="text-sm text-muted-foreground hover:underline">Back to workspace</Link>
+            {user.organizationId != null && <Link href="/" className="text-sm text-muted-foreground hover:underline">Back to workspace</Link>}
             <Button variant="ghost" size="sm" onClick={() => logout()}><LogOut className="mr-2 h-4 w-4" />Sign out</Button>
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl p-4 sm:p-6">{children}</main>
+      <main className="mx-auto max-w-6xl p-4 sm:p-6"><ReauthProvider>{children}</ReauthProvider></main>
     </div>
   );
 }

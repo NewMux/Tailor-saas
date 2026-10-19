@@ -1,4 +1,16 @@
-import { BILLING_READ_ONLY_ERR_MSG, NOT_ADMIN_ERR_MSG, NOT_PLATFORM_STAFF_ERR_MSG, ORG_SUSPENDED_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
+import {
+  BILLING_READ_ONLY_ERR_MSG,
+  IMPERSONATION_BLOCKED_ERR_MSG,
+  IMPERSONATION_READ_ONLY_ERR_MSG,
+  NOT_PLATFORM_STAFF_ERR_MSG,
+  ORG_SUSPENDED_ERR_MSG,
+  REAUTH_REQUIRED_ERR_MSG,
+  UNAUTHED_ERR_MSG,
+} from "@shared/const";
+import { isDeniedWhileImpersonating, isMutationAllowedInWriteMode } from "./impersonationPolicy";
+import { requestContext } from "./requestContext";
+import { platformAudit } from "./platformAudit";
+import { REAUTH_WINDOW_MS } from "./localAuth";
 import { billingAccess } from "../billing/access";
 import { isBillingEnabled } from "./env";
 import { initTRPC, TRPCError } from "@trpc/server";
@@ -8,6 +20,15 @@ import type { TrpcContext } from "./context";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // Unexpected failures (a database error, say) carry the SQL and its values
+  // in their message. In production the caller gets a generic message; the
+  // detail stays in the server log.
+  errorFormatter({ shape, error }) {
+    if (error.code === "INTERNAL_SERVER_ERROR" && process.env.NODE_ENV === "production") {
+      return { ...shape, message: "Something went wrong.", data: { ...shape.data, stack: undefined } };
+    }
+    return shape;
+  },
 });
 
 export const router = t.router;
@@ -43,7 +64,9 @@ const requireOrganizationFor = (options: { enforceBilling: boolean }) => t.middl
     });
   }
 
-  const organization = await getOrganizationById(ctx.user.organizationId);
+  const { user } = ctx;
+  const organizationId: number = ctx.user.organizationId;
+  const organization = await getOrganizationById(organizationId);
   if (organization?.status === "suspended" && !ctx.impersonation) {
     throw new TRPCError({ code: "FORBIDDEN", message: ORG_SUSPENDED_ERR_MSG });
   }
@@ -60,13 +83,34 @@ const requireOrganizationFor = (options: { enforceBilling: boolean }) => t.middl
     throw new TRPCError({ code: "FORBIDDEN", message: BILLING_READ_ONLY_ERR_MSG });
   }
 
-  return next({
-    ctx: {
-      ...ctx,
-      user: ctx.user,
-      organizationId: ctx.user.organizationId,
-    },
-  });
+  if (ctx.impersonation) {
+    const mode = ctx.impersonation.mode === "write" ? "write" : "readonly";
+    if (isDeniedWhileImpersonating(opts.path)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: IMPERSONATION_BLOCKED_ERR_MSG });
+    }
+    if (opts.type === "mutation") {
+      if (mode !== "write") {
+        throw new TRPCError({ code: "FORBIDDEN", message: IMPERSONATION_READ_ONLY_ERR_MSG });
+      }
+      if (!isMutationAllowedInWriteMode(opts.path)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: IMPERSONATION_BLOCKED_ERR_MSG });
+      }
+      // Independent ledger of every change an operator makes as someone else.
+      await platformAudit({
+        actor: { id: ctx.impersonation.platformStaffUserId },
+        action: "IMPERSONATED_MUTATION",
+        targetType: "procedure",
+        organizationId: ctx.user.organizationId,
+        details: { path: opts.path, asUserId: ctx.user.id },
+        req: ctx.req,
+      });
+    }
+  }
+
+  // Lets audit() record the real operator without every call site passing it.
+  return requestContext.run({ impersonatedBy: ctx.impersonation?.platformStaffUserId ?? null, tenantScope: true }, () =>
+    next({ ctx: { ...ctx, user, organizationId } })
+  );
 });
 
 /**
@@ -82,31 +126,6 @@ export const tenantProcedure = t.procedure.use(requireUser).use(requireOrganizat
  * customer portal and pay.
  */
 export const tenantBillingProcedure = t.procedure.use(requireUser).use(requireOrganizationFor({ enforceBilling: false }));
-
-/**
- * NOT platform-staff and NOT tenant-scoped: this only checks the legacy
- * global users.role flag, which createOrganizationWithOwner (server/db.ts)
- * sets to "admin" for every self-serve organization owner. Using this to
- * gate a platform-only feature would silently expose it to every tenant's
- * own owner. For cross-tenant/operator routes, use platformProcedure or
- * superadminProcedure instead.
- */
-export const globalUserAdminProcedure = t.procedure.use(
-  t.middleware(async opts => {
-    const { ctx, next } = opts;
-
-    if (!ctx.user || ctx.user.role !== "admin") {
-      throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
-    }
-
-    return next({
-      ctx: {
-        ...ctx,
-        user: ctx.user,
-      },
-    });
-  })
-);
 
 const requirePlatformStaff = t.middleware(async opts => {
   const { ctx, next } = opts;
@@ -158,3 +177,20 @@ const requireSuperadmin = t.middleware(async opts => {
 
 /** For operator actions with real consequences: suspend/reactivate an org, grant/revoke platform staff, impersonate. */
 export const superadminProcedure = platformProcedure.use(requireSuperadmin);
+
+/** Throws unless the session confirmed its password in the last few minutes. */
+export function assertRecentAuth(ctx: { session?: { reauthAt: Date | null } | null }) {
+  const reauthAt = ctx.session?.reauthAt;
+  if (!reauthAt || Date.now() - reauthAt.getTime() > REAUTH_WINDOW_MS) {
+    throw new TRPCError({ code: "FORBIDDEN", message: REAUTH_REQUIRED_ERR_MSG });
+  }
+}
+
+/** High-risk operator actions need a password confirmation from the last few minutes. */
+const requireRecentAuth = t.middleware(async opts => {
+  assertRecentAuth(opts.ctx);
+  return opts.next();
+});
+
+/** Superadmin procedures with real consequences: staff changes, suspension, write-mode impersonation. */
+export const highRiskProcedure = superadminProcedure.use(requireRecentAuth);

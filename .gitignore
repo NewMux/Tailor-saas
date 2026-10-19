@@ -120,3 +120,7 @@ client/public/__manus__/version.json
 
 # Vercel build output and local project link
 .vercel/
+
+# Secrets and dumps
+reset-links-*.json
+*.dump

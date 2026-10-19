@@ -83,6 +83,7 @@ import {
   getMonthWindow,
   dbOrThrow,
   access,
+  hasAccess,
   audit,
   customerInput,
   tailoringOrderStatuses,
@@ -123,8 +124,13 @@ export const inventoryRouter = router({
           .groupBy(stockMovements.inventoryItemId)
       : [];
     const movementIds = new Set(movementRows.map(row => row.inventoryItemId));
-    return items.map(item => ({
+    // Purchase cost is for the people who manage stock.
+    const seesCost = await hasAccess(ctx.user.id, ctx.organizationId, inventoryRoles);
+    return items.map(({ costPerUnit, ...item }) => ({
       ...item,
+      // Absent (not null) for callers who may not see cost; typed as present so
+      // the stock screens, which only managers reach, keep their types.
+      ...((seesCost ? { costPerUnit } : {}) as { costPerUnit: string }),
       quantity: three(
         effectiveInventoryQuantity({
           inventoryType: item.inventoryType,

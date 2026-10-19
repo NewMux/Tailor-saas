@@ -56,6 +56,7 @@ import {
   INVITE_TTL_MS,
   adminRoles,
   salesRoles,
+  dashboardRoles,
   catalogRoles,
   inventoryRoles,
   payrollRoles,
@@ -94,13 +95,7 @@ import {
 export const dashboardProcedure = tenantProcedure
   .input(dashboardInput.optional())
   .query(async ({ ctx, input }) => {
-    await access(ctx.user.id, ctx.organizationId, [
-      "admin",
-      "sales",
-      "inventory",
-      "tailor",
-      "payroll",
-    ]);
+    await access(ctx.user.id, ctx.organizationId, dashboardRoles);
     const db = await dbOrThrow();
     const range = input?.range || "30d";
     const customRange =
