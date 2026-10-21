@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@shared/const";
+import { PRODUCT_NAME, PRODUCT_NAME_AR } from "@shared/const";
 import type { EmailMessage } from "./email";
 
 function escapeHtml(value: string) {
@@ -102,7 +102,7 @@ export function shopSetupEmail(
       footnote: "If the link has expired, use \"Forgot password?\" on the sign-in page with this email address.",
     },
     {
-      heading: `مرحبًا بك في ${PRODUCT_NAME}`,
+      heading: `مرحبًا بك في ${PRODUCT_NAME_AR}`,
       body: [
         `مساحة العمل الخاصة بـ ${input.shopName} جاهزة. اختر كلمة مرور لتسجيل الدخول. هذا الرابط يعمل مرة واحدة وتنتهي صلاحيته خلال 7 أيام.`,
         ...(trialDate ? [`تستمر الفترة التجريبية المجانية حتى ${trialDate}. لا حاجة لبطاقة دفع حتى ذلك الحين.`] : []),
@@ -125,8 +125,8 @@ export function operatorInviteEmail(to: string, details: { name: string; setupUr
       footnote: "If you weren't expecting this, you can ignore this email.",
     },
     {
-      heading: `تمت إضافتك إلى فريق عمليات ${PRODUCT_NAME}`,
-      body: [`مرحبًا ${details.name}، أصبح لديك وصول تشغيلي إلى ${PRODUCT_NAME}. اختر كلمة مرور لإكمال إعداد حسابك. يعمل هذا الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة.`],
+      heading: `تمت إضافتك إلى فريق عمليات ${PRODUCT_NAME_AR}`,
+      body: [`مرحبًا ${details.name}، أصبح لديك وصول تشغيلي إلى ${PRODUCT_NAME_AR}. اختر كلمة مرور لإكمال إعداد حسابك. يعمل هذا الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة.`],
       button: { label: "تعيين كلمة المرور", url: details.setupUrl },
       footnote: "إذا لم تكن تتوقع هذه الرسالة، يمكنك تجاهلها.",
     }

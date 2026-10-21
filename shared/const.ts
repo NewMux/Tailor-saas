@@ -8,6 +8,8 @@ export const IMPERSONATION_BLOCKED_ERR_MSG = 'This action is not available while
 export const IMPERSONATION_READ_ONLY_ERR_MSG = 'This impersonation session is read-only. Start a write session to make changes (10008)';
 /** Product name used in server-generated copy such as emails. */
 export const PRODUCT_NAME = "Tafsell";
+/** The product's Arabic name, used wherever Arabic copy names it. */
+export const PRODUCT_NAME_AR = "تفصيل";
 // Tafsell is built and run by NewMux; shown as "Tafsell, powered by NewMux".
 export const COMPANY_NAME = "NewMux";
 export const COMPANY_URL = "https://www.newmux.com/";

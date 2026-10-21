@@ -1,6 +1,6 @@
 import { Check, Scissors } from "lucide-react";
 import { Link, Route, Switch } from "wouter";
-import { BOOK_DEMO_URL, COMPANY_NAME, COMPANY_URL, MARKETING_SITE_URL, PRODUCT_NAME } from "@shared/const";
+import { BOOK_DEMO_URL, COMPANY_NAME, COMPANY_URL, MARKETING_SITE_URL, PRODUCT_NAME, PRODUCT_NAME_AR } from "@shared/const";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { legalConfig } from "./legalConfig";
@@ -75,7 +75,7 @@ function Terms() {
   const { isArabic } = useLanguage();
   const c = legalConfig;
   if (isArabic) return <LegalPage title="شروط الخدمة">
-    <p>تحكم هذه الشروط استخدامك لـ {PRODUCT_NAME} ("الخدمة") المقدَّمة من {c.legalBusinessName}، {c.businessAddress} ("نحن"). إذا كانت لديك اتفاقية خدمة موقّعة معنا، فإن تلك الاتفاقية هي المرجع، وتسري أحكامها عند أي تعارض مع هذه الشروط.</p>
+    <p>تحكم هذه الشروط استخدامك لمنصة «{PRODUCT_NAME_AR}» ("الخدمة") المقدَّمة من {c.legalBusinessName}، {c.businessAddress} ("نحن"). إذا كانت لديك اتفاقية خدمة موقّعة معنا، فإن تلك الاتفاقية هي المرجع، وتسري أحكامها عند أي تعارض مع هذه الشروط.</p>
     <h2>الخدمة</h2>
     <p>الخدمة برنامج أعمال عبر الإنترنت لمحلات الخياطة: نقطة بيع، وإدارة العملاء والطلبات، والمخزون، والفوترة، وإدارة الموظفين. قد نحسّن الميزات أو نغيّرها مع الوقت.</p>
     <h2>الحسابات والوصول</h2>
@@ -118,7 +118,7 @@ function Privacy() {
   const { isArabic } = useLanguage();
   const c = legalConfig;
   if (isArabic) return <LegalPage title="سياسة الخصوصية">
-    <p>تشغّل {c.legalBusinessName} ("نحن") خدمة {PRODUCT_NAME}. توضح هذه السياسة البيانات الشخصية التي نعالجها وسبب ذلك.</p>
+    <p>تشغّل {c.legalBusinessName} ("نحن") منصة «{PRODUCT_NAME_AR}». توضح هذه السياسة البيانات الشخصية التي نعالجها وسبب ذلك.</p>
     <h2>ما نجمعه</h2>
     <p>بيانات الحساب (الاسم، البريد الإلكتروني، كلمة المرور بصيغة مشفّرة)؛ وبيانات العمل التي تدخلها (العملاء، المقاسات، الطلبات، المبيعات، الفواتير، سجلات الموظفين ومستنداتهم)؛ والبيانات التقنية (عنوان IP ومعلومات الجهاز والسجلات) اللازمة لتشغيل الخدمة وحمايتها. وعند طلب عرض توضيحي من موقعنا، نحتفظ بالبيانات التي ترسلها (الاسم، اسم المتجر، البريد الإلكتروني، الهاتف، الرسالة) للتواصل معك.</p>
     <h2>كيف نستخدمها</h2>
