@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: "App origin, https only (e.g. https://tafsell.vercel.app)"
+        description: "App origin, https only (e.g. https://app.tafsell.com)"
         required: true
       supabase_url:
         description: "Supabase project URL, optional (e.g. https://<ref>.supabase.co)"
