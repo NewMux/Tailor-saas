@@ -12,7 +12,7 @@ export const PRODUCT_NAME = "Tafsell";
 export const COMPANY_NAME = "NewMux";
 export const COMPANY_URL = "https://www.newmux.com/";
 // Public marketing site (separate repo: tafsell-landing).
-export const MARKETING_SITE_URL = "https://tafsell-landing.vercel.app/";
+export const MARKETING_SITE_URL = "https://tafsell.com/";
 
 // Staff documents are sent base64-encoded in one API request, and Vercel
 // rejects request bodies over 4.5 MB: 3 MB of file is ~4 MB once encoded.
