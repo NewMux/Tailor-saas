@@ -13,6 +13,11 @@ export const COMPANY_NAME = "NewMux";
 export const COMPANY_URL = "https://www.newmux.com/";
 // Public marketing site (separate repo: tafsell-landing).
 export const MARKETING_SITE_URL = "https://tafsell.com/";
+// Inbox for sales enquiries; "Book a demo" requests are emailed here.
+export const SALES_EMAIL = "info@newmux.com";
+// Shops are onboarded by our team after a demo and a signed service
+// agreement, so public pages send prospects to the demo form.
+export const BOOK_DEMO_URL = `${MARKETING_SITE_URL}#book-a-demo`;
 
 // Staff documents are sent base64-encoded in one API request, and Vercel
 // rejects request bodies over 4.5 MB: 3 MB of file is ~4 MB once encoded.

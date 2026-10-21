@@ -723,6 +723,12 @@ const ARABIC_COPY: Record<string, string> = {
   "Staff roles, attendance and payroll": "أدوار الموظفين والحضور والرواتب",
   "Arabic and English, on phone, tablet and desktop": "العربية والإنجليزية على الهاتف والجهاز اللوحي والحاسوب",
   "Create your shop": "أنشئ متجرك",
+  "Pricing that fits your shop": "أسعار تناسب متجرك",
+  "Every plan includes the full system, setup and support. Your price depends on your branches and team, and is set out in your service agreement.": "تشمل كل خطة النظام كاملًا مع الإعداد والدعم. يعتمد السعر على عدد فروعك وفريقك، ويُحدَّد في اتفاقية الخدمة.",
+  "Book a demo and we will send you a quote.": "احجز عرضًا توضيحيًا وسنرسل لك عرض سعر.",
+  "Book a demo": "احجز عرضًا توضيحيًا",
+  "New shop?": "متجر جديد؟",
+  "Home": "الرئيسية",
   "Prices exclude applicable taxes, which are calculated at checkout. Payments are processed by Paddle.com, our reseller and merchant of record.": "الأسعار لا تشمل الضرائب المطبقة، والتي تُحتسب عند الدفع. تتم معالجة المدفوعات بواسطة Paddle.com، الموزّع والتاجر المسجّل لدينا.",
 };
 

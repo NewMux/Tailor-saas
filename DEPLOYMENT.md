@@ -1,9 +1,11 @@
 # Deployment and launch guide (Vercel + Supabase)
 
-This guide takes the app from a fresh Vercel project to a paid, invite-only
-SaaS: shops created by your team with a free trial, subscriptions through
-Paddle, transactional email through Resend, and Supabase as the backend for
-the Postgres database and private file storage.
+This guide takes the app from a fresh Vercel project to a sales-led,
+invite-only SaaS: prospects book a demo on the marketing site, you sign a
+service agreement with them, and your team creates their shop. Transactional
+email goes through Resend, and Supabase is the backend for the Postgres
+database and private file storage. Fees are invoiced under each service
+agreement, so in-app billing (Paddle, section 7) stays switched off.
 
 ## Onboarding model: invite-only
 
@@ -23,9 +25,22 @@ DATABASE_URL=... AUTH_BASE_URL=https://app.yourdomain.com \
   pnpm shop:create --shop "Al Noor Tailors" --owner "Sara Ali" --email sara@example.com
 ```
 
-The sign-in page and `/pricing` point prospective customers to
-`supportEmail` in `client/src/pages/public/legalConfig.ts`; set it before
-launch.
+The sign-in page and `/pricing` send prospective customers to the "Book a
+demo" form on the marketing site (`BOOK_DEMO_URL` in `shared/const.ts`). Fill
+in `client/src/pages/public/legalConfig.ts` before launch: the terms and
+privacy pages show it in English and Arabic.
+
+### Demo requests
+
+The marketing site's form posts to `POST /api/public/demo-request`
+(`server/_core/demoRequests.ts`). Each request is stored in the
+`demoRequests` table first, then emailed to `SALES_EMAIL` (`shared/const.ts`)
+with Reply-To set to the prospect, so replying answers them directly. Only
+`https://tafsell.com` and `https://www.tafsell.com` may call it from a
+browser, it is limited to 5 requests per hour per IP, and a hidden honeypot
+field drops naive bots. Rows whose `notifiedAt` is empty were stored but not
+emailed (Resend not configured or down); check them in the Supabase table
+editor.
 
 Every integration is optional and switched on by its environment variables.
 Deploy with only the required variables first, confirm it works, then add
@@ -185,8 +200,9 @@ round-trips to Postgres.
 
 ## 5. Transactional email (Resend)
 
-Without email, password-reset links are only written to the server log and
-owners must copy invite links by hand. Set it up before inviting real shops.
+Without email, password-reset links are only written to the server log,
+owners must copy invite links by hand, and demo requests from the marketing
+site are stored but nobody is notified. Set it up before launch.
 
 1. Create an account at [resend.com](https://resend.com) → **Domains** → **Add domain** (use a subdomain such as `mail.yourdomain.com` if you like).
 2. Add the DNS records Resend shows (SPF, DKIM) and wait for the domain to show **Verified**.
@@ -222,7 +238,13 @@ S3_SECRET_ACCESS_KEY=...
 Any other S3-compatible provider (Cloudflare R2, AWS S3, Backblaze B2) works
 with the same five variables.
 
-## 7. Subscription billing (Paddle)
+## 7. Subscription billing (Paddle) — not used
+
+Tafsell is sold under service agreements and invoiced outside the app, so
+leave every `PADDLE_*` variable unset: billing stays off, no shop is ever
+made read-only, and the Billing page is hidden. The rest of this section
+applies only if you later move to self-serve subscriptions; the public
+pricing and terms pages would then need rewriting for it.
 
 Paddle is the merchant of record: it charges the customer, handles sales
 tax/VAT and sends receipts. The app only needs to know each shop's
@@ -279,8 +301,8 @@ is restricted and the Billing page and banners disappear.
 | Staff invite | Owner Settings → Invite staff emails the invite; accepting with the invited email works, and a different email is refused. |
 | Tenant isolation | With two organizations, neither sees the other's customers, sales, inventory or staff. |
 | Documents | Uploading and opening a staff document works (Staff & Payroll), and a file over 3 MB is refused with a clear message. |
-| Billing | Sandbox checkout activates the shop; an expired trial makes it read-only; the ops console can exempt it. |
-| Public pages | `/pricing`, `/terms`, `/privacy`, `/refunds` load while signed out and show your real business details. |
+| Demo requests | Submitting the form on tafsell.com stores a row in `demoRequests` and the sales inbox receives it; replying goes to the prospect. |
+| Public pages | `/pricing`, `/terms`, `/privacy` load while signed out, in English and Arabic, and show your real business details. |
 | Persistence | Create a customer, redeploy, and confirm it's still there. |
 | Backups | The Supabase project is on Pro with daily backups (see below). |
 | Data API | `curl https://phbiaqtxqwqzouqsexbj.supabase.co/rest/v1/users -H "apikey: <anon key>"` returns `[]`, never rows. |
