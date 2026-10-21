@@ -7,8 +7,7 @@ import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { legalConfig } from "@/pages/public/legalConfig";
-import { COMPANY_NAME, COMPANY_URL, MARKETING_SITE_URL, PRODUCT_NAME } from "@shared/const";
+import { BOOK_DEMO_URL, COMPANY_NAME, COMPANY_URL, MARKETING_SITE_URL, PRODUCT_NAME } from "@shared/const";
 
 type AuthGateProps = {
   callbackError?: string | null;
@@ -242,10 +241,9 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
           ) : (
             <p>
               New shop?{" "}
-              <a href={`mailto:${legalConfig.supportEmail}`} className="text-foreground underline-offset-4 hover:underline">
-                Contact us
-              </a>{" "}
-              to get an account.
+              <a href={BOOK_DEMO_URL} className="text-foreground underline-offset-4 hover:underline">
+                Book a demo
+              </a>
             </p>
           )}
         </div>}
@@ -254,7 +252,6 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
           <Link href="/pricing" className="hover:underline">Pricing</Link>
           <Link href="/terms" className="hover:underline">Terms</Link>
           <Link href="/privacy" className="hover:underline">Privacy</Link>
-          <Link href="/refunds" className="hover:underline">Refunds</Link>
         </nav>
         <p className="mt-3 text-center text-[11px] text-muted-foreground" data-no-translate>
           {PRODUCT_NAME}, powered by{" "}

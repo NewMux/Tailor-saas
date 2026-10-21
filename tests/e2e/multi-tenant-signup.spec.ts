@@ -18,7 +18,7 @@ test.describe.serial("invite-only onboarding and isolation", () => {
   test("the sign-in screen offers no public sign-up", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByText("Sign in to Tafsell")).toBeVisible();
-    await expect(page.getByText("Contact us")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Book a demo" })).toHaveAttribute("href", "https://tafsell.com/#book-a-demo");
     await expect(page.getByText("Need an account? Register")).toHaveCount(0);
     await expect(page.getByText("Create your shop")).toHaveCount(0);
   });

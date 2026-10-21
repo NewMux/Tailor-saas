@@ -7,6 +7,8 @@ export type EmailMessage = {
   subject: string;
   html: string;
   text: string;
+  /** Where replies go instead of EMAIL_FROM, e.g. the prospect behind a demo request. */
+  replyTo?: string;
 };
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
@@ -36,6 +38,7 @@ export async function sendEmail(message: EmailMessage): Promise<{ sent: boolean 
         subject: message.subject,
         html: message.html,
         text: message.text,
+        ...(message.replyTo ? { reply_to: message.replyTo } : {}),
       }),
       signal: AbortSignal.timeout(10_000),
     });

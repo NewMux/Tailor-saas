@@ -179,3 +179,22 @@ export const authEvents = pgTable("authEvents", {
   userIdx: index("authEvents_userId_createdAt_idx").on(table.userId, table.createdAt),
 }));
 export type AuthEvent = typeof authEvents.$inferSelect;
+
+// "Book a demo" requests from the marketing site (tafsell.com). Not tied to
+// any organization: these are prospects, kept so a lead is never lost when
+// the notification email fails. See server/_core/demoRequests.ts.
+export const demoRequests = pgTable("demoRequests", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 160 }).notNull(),
+  shopName: varchar("shopName", { length: 160 }).notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  phone: varchar("phone", { length: 40 }),
+  message: text("message"),
+  language: varchar("language", { length: 2 }).notNull().default("en"),
+  ip: varchar("ip", { length: 64 }),
+  notifiedAt: timestamp("notifiedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({
+  createdAtIdx: index("demoRequests_createdAt_idx").on(table.createdAt),
+}));
+export type DemoRequest = typeof demoRequests.$inferSelect;

@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@shared/const";
+import { PRODUCT_NAME, PRODUCT_NAME_AR } from "@shared/const";
 import type { EmailMessage } from "./email";
 
 function escapeHtml(value: string) {
@@ -102,7 +102,7 @@ export function shopSetupEmail(
       footnote: "If the link has expired, use \"Forgot password?\" on the sign-in page with this email address.",
     },
     {
-      heading: `مرحبًا بك في ${PRODUCT_NAME}`,
+      heading: `مرحبًا بك في ${PRODUCT_NAME_AR}`,
       body: [
         `مساحة العمل الخاصة بـ ${input.shopName} جاهزة. اختر كلمة مرور لتسجيل الدخول. هذا الرابط يعمل مرة واحدة وتنتهي صلاحيته خلال 7 أيام.`,
         ...(trialDate ? [`تستمر الفترة التجريبية المجانية حتى ${trialDate}. لا حاجة لبطاقة دفع حتى ذلك الحين.`] : []),
@@ -125,11 +125,45 @@ export function operatorInviteEmail(to: string, details: { name: string; setupUr
       footnote: "If you weren't expecting this, you can ignore this email.",
     },
     {
-      heading: `تمت إضافتك إلى فريق عمليات ${PRODUCT_NAME}`,
-      body: [`مرحبًا ${details.name}، أصبح لديك وصول تشغيلي إلى ${PRODUCT_NAME}. اختر كلمة مرور لإكمال إعداد حسابك. يعمل هذا الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة.`],
+      heading: `تمت إضافتك إلى فريق عمليات ${PRODUCT_NAME_AR}`,
+      body: [`مرحبًا ${details.name}، أصبح لديك وصول تشغيلي إلى ${PRODUCT_NAME_AR}. اختر كلمة مرور لإكمال إعداد حسابك. يعمل هذا الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة.`],
       button: { label: "تعيين كلمة المرور", url: details.setupUrl },
       footnote: "إذا لم تكن تتوقع هذه الرسالة، يمكنك تجاهلها.",
     }
   );
   return { to, subject: `Your ${PRODUCT_NAME} operator account`, html, text };
+}
+
+export type DemoRequestDetails = {
+  name: string;
+  shopName: string;
+  email: string;
+  phone: string | null;
+  message: string | null;
+  language: "en" | "ar";
+};
+
+/** Internal notification to the sales inbox; replies go to the prospect. */
+export function demoRequestEmail(to: string, request: DemoRequestDetails): EmailMessage {
+  const rows: Array<[string, string]> = [
+    ["Name", request.name],
+    ["Shop", request.shopName],
+    ["Email", request.email],
+    ["Phone", request.phone ?? "—"],
+    ["Site language", request.language === "ar" ? "Arabic" : "English"],
+  ];
+  const message = request.message ?? "(no message)";
+  const html = `<!doctype html><html><body style="margin:0;background:#f5f5f4;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
+    <div style="background:#ffffff;border:1px solid #e7e5e4;border-radius:16px;padding:28px;">
+      <h1 style="font-size:20px;margin:0 0 16px;color:#1c1917;">New demo request</h1>
+      <table style="border-collapse:collapse;font-size:14px;color:#44403c;">
+        ${rows.map(([label, value]) => `<tr><td style="padding:4px 16px 4px 0;color:#78716c;">${escapeHtml(label)}</td><td style="padding:4px 0;" dir="auto">${escapeHtml(value)}</td></tr>`).join("")}
+      </table>
+      <p style="margin:16px 0 0;line-height:1.5;color:#44403c;white-space:pre-wrap;" dir="auto">${escapeHtml(message)}</p>
+      <p style="margin:20px 0 0;font-size:12px;color:#78716c;">Reply to this email to answer ${escapeHtml(request.name)} directly.</p>
+    </div>
+  </div></body></html>`;
+  const text = `New demo request\n\n${rows.map(([label, value]) => `${label}: ${value}`).join("\n")}\n\n${message}\n`;
+  return { to, subject: `Demo request: ${request.shopName} (${request.name})`, html, text, replyTo: request.email };
 }

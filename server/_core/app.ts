@@ -7,6 +7,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { registerAuthRoutes } from "./localAuth";
 import { registerAuthRateLimits } from "./rateLimit";
 import { registerHealthRoute } from "./health";
+import { registerDemoRequestRoute } from "./demoRequests";
 import { registerPaddleWebhook } from "../billing/webhook";
 import { ENV } from "./env";
 import { createHttpLogger, logger } from "./logger";
@@ -58,6 +59,9 @@ export function createApp(): Express {
     }
     next();
   });
+  // Before the app-wide CORS rule: tafsell.com may reach this one public
+  // endpoint without being an allowed origin for the authenticated API.
+  registerDemoRequestRoute(app);
   registerCors(app);
   registerHealthRoute(app);
   registerPaddleWebhook(app);
