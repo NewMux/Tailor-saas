@@ -20,23 +20,23 @@ type Section = { heading: string; body: string[]; button?: { label: string; url:
 function layout(english: Section, arabic: Section) {
   const block = (section: Section, dir: "ltr" | "rtl") => `
     <div dir="${dir}" style="text-align:${dir === "rtl" ? "right" : "left"};">
-      <h1 style="font-size:20px;margin:0 0 12px;color:#1c1917;">${escapeHtml(section.heading)}</h1>
-      ${section.body.map(p => `<p style="margin:0 0 12px;line-height:1.5;color:#44403c;">${escapeHtml(p)}</p>`).join("")}
+      <h1 style="font-size:20px;margin:0 0 12px;color:#111733;">${escapeHtml(section.heading)}</h1>
+      ${section.body.map(p => `<p style="margin:0 0 12px;line-height:1.5;color:#111733;">${escapeHtml(p)}</p>`).join("")}
       ${
         section.button
-          ? `<p style="margin:20px 0;"><a href="${escapeHtml(section.button.url)}" style="background:#1c1917;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:10px;display:inline-block;">${escapeHtml(section.button.label)}</a></p>`
+          ? `<p style="margin:20px 0;"><a href="${escapeHtml(section.button.url)}" style="background:#1E2A5A;color:#F7F4EE;text-decoration:none;padding:12px 20px;border-radius:10px;display:inline-block;">${escapeHtml(section.button.label)}</a></p>`
           : ""
       }
-      ${section.footnote ? `<p style="margin:0;font-size:12px;color:#78716c;">${escapeHtml(section.footnote)}</p>` : ""}
+      ${section.footnote ? `<p style="margin:0;font-size:12px;color:#5B6380;">${escapeHtml(section.footnote)}</p>` : ""}
     </div>`;
-  const html = `<!doctype html><html><body style="margin:0;background:#f5f5f4;font-family:Arial,Helvetica,sans-serif;">
+  const html = `<!doctype html><html><body style="margin:0;background:#F7F4EE;font-family:Arial,Helvetica,sans-serif;">
   <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-    <div style="background:#ffffff;border:1px solid #e7e5e4;border-radius:16px;padding:28px;">
+    <div style="background:#ffffff;border:1px solid #E8E1D3;border-radius:16px;padding:28px;">
       ${block(english, "ltr")}
-      <hr style="border:none;border-top:1px solid #e7e5e4;margin:24px 0;" />
+      <hr style="border:none;border-top:2px dashed #D4A13A;margin:24px 0;" />
       ${block(arabic, "rtl")}
     </div>
-    <p style="text-align:center;font-size:12px;color:#a8a29e;margin-top:16px;">${escapeHtml(PRODUCT_NAME)}</p>
+    <p style="text-align:center;font-size:12px;color:#5B6380;margin-top:16px;">${escapeHtml(PRODUCT_NAME)}</p>
   </div></body></html>`;
   const textBlock = (section: Section) =>
     [section.heading, "", ...section.body, section.button ? `${section.button.label}: ${section.button.url}` : "", section.footnote ?? ""]
@@ -153,15 +153,15 @@ export function demoRequestEmail(to: string, request: DemoRequestDetails): Email
     ["Site language", request.language === "ar" ? "Arabic" : "English"],
   ];
   const message = request.message ?? "(no message)";
-  const html = `<!doctype html><html><body style="margin:0;background:#f5f5f4;font-family:Arial,Helvetica,sans-serif;">
+  const html = `<!doctype html><html><body style="margin:0;background:#F7F4EE;font-family:Arial,Helvetica,sans-serif;">
   <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-    <div style="background:#ffffff;border:1px solid #e7e5e4;border-radius:16px;padding:28px;">
-      <h1 style="font-size:20px;margin:0 0 16px;color:#1c1917;">New demo request</h1>
-      <table style="border-collapse:collapse;font-size:14px;color:#44403c;">
-        ${rows.map(([label, value]) => `<tr><td style="padding:4px 16px 4px 0;color:#78716c;">${escapeHtml(label)}</td><td style="padding:4px 0;" dir="auto">${escapeHtml(value)}</td></tr>`).join("")}
+    <div style="background:#ffffff;border:1px solid #E8E1D3;border-radius:16px;padding:28px;">
+      <h1 style="font-size:20px;margin:0 0 16px;color:#111733;">New demo request</h1>
+      <table style="border-collapse:collapse;font-size:14px;color:#111733;">
+        ${rows.map(([label, value]) => `<tr><td style="padding:4px 16px 4px 0;color:#5B6380;">${escapeHtml(label)}</td><td style="padding:4px 0;" dir="auto">${escapeHtml(value)}</td></tr>`).join("")}
       </table>
-      <p style="margin:16px 0 0;line-height:1.5;color:#44403c;white-space:pre-wrap;" dir="auto">${escapeHtml(message)}</p>
-      <p style="margin:20px 0 0;font-size:12px;color:#78716c;">Reply to this email to answer ${escapeHtml(request.name)} directly.</p>
+      <p style="margin:16px 0 0;line-height:1.5;color:#111733;white-space:pre-wrap;" dir="auto">${escapeHtml(message)}</p>
+      <p style="margin:20px 0 0;font-size:12px;color:#5B6380;">Reply to this email to answer ${escapeHtml(request.name)} directly.</p>
     </div>
   </div></body></html>`;
   const text = `New demo request\n\n${rows.map(([label, value]) => `${label}: ${value}`).join("\n")}\n\n${message}\n`;

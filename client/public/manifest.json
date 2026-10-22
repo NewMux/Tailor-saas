@@ -31,8 +31,8 @@
   ],
   "start_url": "/",
   "scope": "/",
-  "background_color": "#fbfaf5",
-  "theme_color": "#1d496b",
+  "background_color": "#f7f4ee",
+  "theme_color": "#1e2a5a",
   "display": "standalone",
   "orientation": "portrait"
 }

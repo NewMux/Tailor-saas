@@ -1,7 +1,7 @@
 import { authApi } from "@/lib/auth";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { clientBrand } from "@/lib/branding";
-import { Loader2, Scissors } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -96,10 +96,10 @@ export default function AuthGate({ callbackError, recoveryMode = false, resetTok
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-stone-50 p-6">
-      <div className="relative w-full max-w-md rounded-2xl border bg-white p-8 shadow-sm">
-        <Button data-no-translate type="button" variant="outline" size="sm" className="absolute right-5 top-5 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
-        <Scissors className="mx-auto h-8 w-8 text-primary" />
+    <main className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="stitch-frame relative w-full max-w-md rounded-2xl border bg-white p-10 shadow-sm">
+        <Button data-no-translate type="button" variant="outline" size="sm" className="absolute right-7 top-7 rounded-xl" onClick={toggleLanguage}>{isArabic ? "EN" : "عربي"}</Button>
+        <img src={clientBrand.logoSrc} alt={clientBrand.logoAlt} className="mx-auto h-14 w-14 object-contain" />
         <h1 className="mt-5 text-center text-2xl font-semibold">
           {recoveryMode ? "Set your password" : mode === "login" ? `Sign in to ${clientBrand.name}` : mode === "forgot" ? "Reset your password" : "Join your team"}
         </h1>

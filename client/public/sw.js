@@ -1,4 +1,4 @@
-const SHELL_CACHE = "tailor-erp-mobile-shell-v7";
+const SHELL_CACHE = "tailor-erp-mobile-shell-v8";
 const APP_SHELL = [
   "/",
   "/index.html",
