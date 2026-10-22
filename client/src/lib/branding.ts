@@ -3,6 +3,6 @@
 // deployment. The public marketing site lives in a separate repo.
 export const clientBrand = {
   name: "Tafsell",
-  logoSrc: "/brand/tafsell-logo-512.jpg",
+  logoSrc: "/brand/tafsell-icon-512.png",
   logoAlt: "Tafsell logo",
 } as const;

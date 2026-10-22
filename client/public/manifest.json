@@ -5,22 +5,34 @@
   "description": "Mobile workspace for tailoring, counter sales, inventory, invoicing, and staff access.",
   "icons": [
     {
-      "src": "/brand/tafsell-logo-192.jpg",
-      "type": "image/jpeg",
+      "src": "/brand/tafsell-icon-192.png",
+      "type": "image/png",
       "sizes": "192x192",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
-      "src": "/brand/tafsell-logo-512.jpg",
-      "type": "image/jpeg",
+      "src": "/brand/tafsell-icon-512.png",
+      "type": "image/png",
       "sizes": "512x512",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/tafsell-icon-maskable-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/brand/tafsell-icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
     }
   ],
   "start_url": "/",
   "scope": "/",
-  "background_color": "#fbfaf5",
-  "theme_color": "#1d496b",
+  "background_color": "#f7f4ee",
+  "theme_color": "#1e2a5a",
   "display": "standalone",
   "orientation": "portrait"
 }

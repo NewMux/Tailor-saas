@@ -23,7 +23,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
 
   if (!user?.isPlatformStaff) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-stone-50 p-4">
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <div className="w-full max-w-sm rounded-2xl border bg-white p-6 text-center shadow-sm">
           <ShieldAlert className="mx-auto h-8 w-8 text-muted-foreground" />
           <p className="mt-3 text-sm font-semibold">Not authorized</p>
@@ -35,7 +35,7 @@ export default function OpsShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-[100dvh] bg-stone-50">
+    <div className="min-h-[100dvh] bg-background">
       <header className="border-b bg-white px-4 py-3">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3">
           <p className="text-sm font-semibold">Tafsell Platform Ops</p>

@@ -9,7 +9,7 @@ export default function OrganizationSuspended({ onSignOut }: { onSignOut: () => 
   const [signingOut, setSigningOut] = useState(false);
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-stone-50 p-4">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm rounded-2xl border bg-white p-6 text-center shadow-sm">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
           <AlertCircle className="h-6 w-6 text-red-600" />

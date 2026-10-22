@@ -73,9 +73,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return <>
     {user?.impersonation && <ImpersonationBanner startedBy={user.impersonation.by} mode={user.impersonation.mode} />}
-    <div className={`min-h-[100dvh] bg-stone-50 ${isArabic ? "text-right" : "text-left"} ${impersonating ? "pt-10" : ""}`}>
+    <div className={`min-h-[100dvh] bg-background ${isArabic ? "text-right" : "text-left"} ${impersonating ? "pt-10" : ""}`}>
     <aside className={`fixed ${impersonating ? "top-10 bottom-0" : "inset-y-0"} hidden w-64 bg-white p-4 lg:block ${isArabic ? "right-0 border-l" : "left-0 border-r"}`}>
-      <div className="flex items-center gap-3 px-3 py-4">
+      <div className="stitch-b flex items-center gap-3 px-3 py-4">
         <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-white shadow-sm">
           <img src={clientBrand.logoSrc} alt={clientBrand.logoAlt} className="h-full w-full object-contain" />
         </div>

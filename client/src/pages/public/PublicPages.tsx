@@ -9,7 +9,7 @@ export const PUBLIC_PATHS = ["/pricing", "/terms", "/privacy"];
 
 function PublicShell({ children }: { children: React.ReactNode }) {
   const { isArabic, toggleLanguage } = useLanguage();
-  return <div className="min-h-[100dvh] bg-stone-50">
+  return <div className="min-h-[100dvh] bg-background">
     <header className="border-b bg-white">
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-4">
         <a href={MARKETING_SITE_URL} className="flex items-center gap-2 font-semibold"><Scissors className="h-5 w-5 text-primary" /><span className="leading-tight">{PRODUCT_NAME}<span className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" data-no-translate>powered by {COMPANY_NAME}</span></span></a>
